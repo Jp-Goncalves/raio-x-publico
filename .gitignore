@@ -17,3 +17,6 @@ dbt/logs/
 
 # Airflow - logs das execuções
 airflow/logs/
+
+# dbt - id anônimo de telemetria, criado sempre que o dbt roda
+.user.yml
