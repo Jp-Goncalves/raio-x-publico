@@ -126,6 +126,10 @@ Os detalhes estão em [docs/notes.md](docs/notes.md). Os pontos que mais importa
 - A capital (São Paulo) é auditada pelo TCM-SP, não pelo TCE-SP, então a API devolve `[]` pra ela.
 - O campo `evento` tem 5 valores que são **etapas do mesmo gasto**: `Empenhado`, `Valor Liquidado`, `Valor Pago`, `Reforço` e `Anulação`. Somar `vl_despesa` sem separar as etapas conta o mesmo gasto várias vezes. Use `fct_despesas_mensais`, que traz cada etapa em uma coluna própria.
 
+## Como este projeto foi feito
+
+Projeto de estudo, parte de um roadmap de engenharia de dados (Python, PostgreSQL, dbt, Airflow). Usei o Claude (Anthropic) como tutor e par de programação: ele escreveu boa parte do código a partir das decisões que tomamos juntos, e eu conduzi o projeto passo a passo, decidindo a arquitetura (ELT com raw em JSONB, idempotência por UPSERT e partition overwrite, um único ponto de entrada, escopo dos marts) e pedindo a explicação de cada conceito antes de seguir. Os resultados foram validados contra dados reais: a versão em dbt foi comparada com a versão em Python, e o mart é reconciliado com o staging por teste.
+
 ## Roadmap
 
 - [x] Fase 1: extract, load e transform manuais em Python, com backfill
