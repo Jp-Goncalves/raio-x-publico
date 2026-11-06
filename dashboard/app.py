@@ -141,19 +141,34 @@ opcoes = sorted(nomes, key=lambda slug: (slug not in com_dados, nomes[slug]))
 hoje = date.today()
 inicio_padrao, fim_padrao = mes_de_defasagem(hoje)
 
+# O que já foi confirmado volta como valor inicial dos filtros. Sem isso, quando a carga termina
+# os municípios novos ganham ✓ e sobem pro topo da lista; com as opções em outra ordem, o
+# Streamlit trata o filtro como um widget novo e o zera, e a pessoa perderia as cidades escolhidas.
+anterior = st.session_state.get("aplicado")
+if anterior and anterior["uf"] == uf:
+    cidades_iniciais = [c for c in anterior["cidades"] if c in nomes]
+    periodo_inicial = anterior["intervalo"]
+else:
+    cidades_iniciais = []  # primeira vez: abre sem nenhuma cidade, quem usa escolhe
+    periodo_inicial = (inicio_padrao, fim_padrao)
+
+# com uma carga em andamento, o botão fica travado: sem isso, cada clique a mais seria um pedido
+carga_atual = st.session_state.get("carga")
+carregando = bool(carga_atual and carga_atual.get("fase") == "andamento")
+
 # dentro do formulário, mexer nos widgets não refaz a tela: só o botão Confirmar aplica
 with st.sidebar.form("filtros"):
     cidades_sel = st.multiselect(
         "Cidades",
         opcoes,
-        default=[],  # abre sem nenhuma cidade: quem usa escolhe
+        default=cidades_iniciais,
         format_func=rotulo_cidade,
         placeholder="Escolha uma ou mais cidades",
         help="✓ = município com dados carregados.",
     )
     intervalo = st.date_input(
         "Período",
-        value=(inicio_padrao, fim_padrao),
+        value=periodo_inicial,
         min_value=PRIMEIRO_MES_DA_FONTE,
         max_value=hoje,
         format="DD/MM/YYYY",
@@ -162,7 +177,9 @@ with st.sidebar.form("filtros"):
             "Os dados são mensais: vale cada mês que o intervalo toca."
         ),
     )
-    confirmar = st.form_submit_button("Confirmar", type="primary", width="stretch")
+    if carregando:
+        st.caption("⏳ Carga em andamento. Aguarde para confirmar de novo.")
+    confirmar = st.form_submit_button("Confirmar", type="primary", width="stretch", disabled=carregando)
 
 # o botão só devolve True no clique; o que foi confirmado fica guardado entre as interações
 if confirmar:
@@ -198,27 +215,27 @@ def meses_do_intervalo(inicio: str, fim: str) -> list[str]:
 # (e só ele), consultando o andamento da carga sem recarregar a tela toda
 @st.fragment(run_every="5s")
 def acompanhar_carga(run_id: str, descricao: str) -> None:
+    # fases da carga em st.session_state["carga"]["fase"]: andamento -> concluida | falhou | parada.
+    # Quando a fase muda, a página INTEIRA é refeita (st.rerun), pra o botão Confirmar destravar.
     try:
         estado = estado_da_carga(run_id)
     except AirflowIndisponivel as e:
+        estado = None
         st.error(f"Perdi o contato com o Airflow: {e}.")
-        return
     if estado == "success":
         st.cache_data.clear()  # senão o dashboard seguiria mostrando a consulta antiga por 5 min
-        st.session_state["carga"]["concluida"] = True
-        st.rerun()  # redesenha a página inteira, agora com o dado
-    elif estado == "failed":
-        st.error(
-            f"A carga de {descricao} falhou. Pode ser que a fonte ainda não tenha publicado esse "
-            "período, ou que a cidade não tenha dado nele. Os detalhes estão no Airflow "
-            "(http://127.0.0.1:8080)."
-        )
-        if st.button("Tentar de novo"):
-            st.session_state.pop("carga", None)
-            st.rerun()
-    else:
+        st.session_state["carga"]["fase"] = "concluida"
+        st.rerun()
+    if estado == "failed":
+        st.session_state["carga"]["fase"] = "falhou"
+        st.rerun()
+    if estado is not None:
         andamento = "na fila" if estado == "queued" else "em andamento"
         st.info(f"⏳ Carregando {descricao} ({andamento}). Esta tela atualiza sozinha quando terminar.")
+    # saída pra quem não quer esperar: a carga continua no Airflow, só deixamos de acompanhá-la
+    if st.button("Parar de acompanhar"):
+        st.session_state["carga"]["fase"] = "parada"
+        st.rerun()
 
 
 def solicitar_carga(faltando: list[str], meses: list[str]) -> None:
@@ -250,13 +267,31 @@ def solicitar_carga(faltando: list[str], meses: list[str]) -> None:
 
     carga = st.session_state.get("carga")
     if carga and carga["chave"] == chave:  # pedido já feito nesta sessão: não dispara de novo
-        if carga.get("concluida"):
+        fase = carga["fase"]
+        if fase == "concluida":
             st.warning(
                 f"A carga terminou, mas ainda não há dados de {descricao}: a fonte pode não ter "
                 "publicado esse período."
             )
-            return
-        acompanhar_carga(carga["run_id"], descricao)
+        elif fase == "falhou":
+            st.error(
+                f"A carga de {descricao} falhou. Pode ser que a fonte ainda não tenha publicado esse "
+                "período, ou que a cidade não tenha dado nele. Os detalhes estão no Airflow "
+                "(http://127.0.0.1:8080)."
+            )
+            if st.button("Tentar de novo"):
+                st.session_state.pop("carga", None)
+                st.rerun()
+        elif fase == "parada":
+            st.info(
+                f"Você parou de acompanhar a carga de {descricao}. Ela continua no Airflow e, quando "
+                "terminar, o dado aparece aqui."
+            )
+            if st.button("Acompanhar de novo"):
+                carga["fase"] = "andamento"
+                st.rerun()
+        else:  # andamento
+            acompanhar_carga(carga["run_id"], descricao)
         return
 
     try:
@@ -274,8 +309,8 @@ def solicitar_carga(faltando: list[str], meses: list[str]) -> None:
             "está no ar? (`docker compose --profile airflow up -d`)"
         )
         return
-    st.session_state["carga"] = {"chave": chave, "run_id": run_id}
-    acompanhar_carga(run_id, descricao)
+    st.session_state["carga"] = {"chave": chave, "run_id": run_id, "fase": "andamento"}
+    st.rerun()  # refaz a página já com a carga em andamento: o botão Confirmar nasce travado
 
 
 cidades_aplicadas = aplicado["cidades"]
