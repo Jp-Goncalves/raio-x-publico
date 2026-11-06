@@ -60,7 +60,8 @@ Há um único ponto de entrada, `src/main.py`, com subcomandos:
 | `python src/main.py load <cidade> <ano> <mes>` | Carrega o JSON salvo em `raw_pagamentos` |
 | `python src/main.py transform <cidade> <ano> <mes>` | Trata e grava em `stg_pagamentos` |
 | `python src/main.py pipeline <cidade> <ano> <mes>` | Roda extract, load e transform em sequência |
-| `python src/main.py backfill` | Roda o pipeline pra vários períodos (lista em `src/backfill.py`) |
+| `python src/main.py backfill <ano> <cidade> [<cidade> ...]` | Roda o pipeline pros 12 meses de um ano, pra uma ou mais cidades (validadas pela dimensão) |
+| `python src/main.py cidades [<cidade> ...]` | Imprime (JSON) as cidades a processar: as informadas (validadas) ou, sem nenhuma, as que já foram carregadas. Usado pelo DAG |
 | `python src/main.py municipios <UF>` | Carrega os municípios de uma UF (API de localidades do IBGE) em `raw_ibge_municipios` |
 | `python src/main.py municipios-tce-sp` | Carrega a lista de municípios que o TCE-SP atende em `raw_tce_sp_municipios` |
 
@@ -109,8 +110,8 @@ A interface fica em http://127.0.0.1:8080, com usuário e senha definidos por `A
 
 O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `dbt test`) nasce **pausado**. Um disparo manual num DAG pausado fica na fila sem executar, então ative-o na interface antes de usar. Ao ativar, o Airflow cria na hora uma execução pro último mês agendado que ficou pra trás: ela processa o mês de três meses antes da data dessa execução e, se o TCE-SP ainda não publicou esse mês, a extração falha sem gravar nada e tenta de novo no dia seguinte, até 3 vezes.
 
-- **Agendado:** todo dia 1º, às 06:00 (São Paulo), processa o mês de **três meses antes** da execução (constante `MESES_DE_DEFASAGEM` no DAG) das cidades padrão (`jacarei` e `campinas`). Não é o mês anterior porque o TCE-SP publica com atraso: em 06/11/2026 as duas cidades tinham setembro, mas outubro e novembro vinham vazios.
-- **Manual:** o disparo aceita os parâmetros `cidades`, `mes_inicial` (AAAA-MM) e `quantidade_de_meses`. Por exemplo, `["jacarei"]`, `2020-03` e `3` processam março a maio de 2020 de uma cidade só. Dá pra testar sem ativar o DAG: `docker compose --profile airflow exec airflow-scheduler airflow dags test despesas_mensais -c '{"cidades":["jacarei"],"mes_inicial":"2020-03","quantidade_de_meses":3}'`.
+- **Agendado:** todo dia 1º, às 06:00 (São Paulo), processa o mês de **três meses antes** da execução (constante `MESES_DE_DEFASAGEM` no DAG) das cidades que **já foram carregadas** (com dado de verdade: não há lista fixa no DAG). Não é o mês anterior porque o TCE-SP publica com atraso: em 06/11/2026 as duas cidades tinham setembro, mas outubro e novembro vinham vazios.
+- **Manual:** o disparo aceita os parâmetros `cidades` (uma ou mais; vazio = as já carregadas), `mes_inicial` (AAAA-MM) e `quantidade_de_meses`. As cidades escolhidas são validadas contra `dim_municipio`: só vale cidade que o TCE-SP atende, senão a execução falha logo, com a lista das inválidas. Por exemplo, `["jacarei"]`, `2020-03` e `3` processam março a maio de 2020 de uma cidade só. Dá pra testar sem ativar o DAG: `docker compose --profile airflow exec airflow-scheduler airflow dags test despesas_mensais -c '{"cidades":["jacarei"],"mes_inicial":"2020-03","quantidade_de_meses":3}'`.
 - **Histórico:** o *backfill* do Airflow repete o schedule sobre um intervalo de datas (verificado apenas em simulação, com `dry_run`).
 
 **6. Dashboard**
@@ -119,7 +120,8 @@ O dashboard é um app Streamlit que lê só o mart `fct_despesas_mensais`, entã
 
 - **Estado:** vem das dimensões (`dim_estado`); por enquanto só SP, que é o único estado com município atendido pela fonte.
 - **Cidades:** seleção múltipla com os municípios do estado atendidos pelo TCE-SP (`dim_municipio`), abre **sem nenhuma cidade marcada**. As com ✓ têm dados carregados e vêm primeiro; escolher uma sem dados só mostra um aviso (a carga sob demanda ainda não existe). Os valores das cidades escolhidas são somados.
-- **Período:** calendário, que abre no **mês mais recente com dado** (a fonte publica com atraso, então o mês atual estaria vazio).
+- **Período:** calendário, que abre **três meses antes de hoje** (a fonte publica com atraso, então o mês atual estaria vazio) e vai de janeiro de 2014, o primeiro mês que a fonte tem (medido em Jacareí; outras cidades podem começar depois), até hoje. Se o período não tiver dado carregado, a tela avisa e diz quantos meses existem.
+- **Confirmar:** cidades e período ficam num formulário: mexer neles não muda a tela, só o botão **Confirmar** aplica. O estado fica fora do formulário (as cidades dependem dele) e o filtro de órgãos vem depois, já sobre o que foi confirmado.
 - **Órgãos.**
 
 A tela tem três métricas, um gráfico de evolução mensal (uma linha por etapa do gasto, ou barras lado a lado quando só um mês está selecionado), um gráfico do pago por órgão (a cor indica a cidade) e a tabela de detalhe. Pra carregar mais uma cidade, rode o pipeline ou o DAG pra ela. O dashboard precisa das dimensões prontas: rode `municipios SP`, `municipios-tce-sp` e `dbt run` antes. Os valores de empenhado, liquidado e pago aparecem separados porque são etapas do mesmo gasto e não podem ser somados entre si.
@@ -154,7 +156,7 @@ src/
   municipios.py  carrega os municípios do IBGE e a lista do TCE-SP nas tabelas raw
   load.py        UPSERT do JSON bruto em raw_pagamentos
   transform.py   conversão de tipos e gravação em stg_pagamentos
-  backfill.py    carga histórica de várias cidades e meses
+  backfill.py    carga histórica de um ano inteiro, pras cidades informadas
   db.py          conexão com o Postgres
 sql/schema.sql   tabelas raw_pagamentos, raw_ibge_municipios, raw_tce_sp_municipios e stg_pagamentos
 dbt/

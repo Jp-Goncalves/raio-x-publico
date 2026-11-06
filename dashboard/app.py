@@ -12,6 +12,13 @@ from db import conectar  # noqa: E402
 
 COLUNAS_VALOR = ["empenhado_liquido", "liquidado", "pago"]
 
+# a fonte publica com atraso: o filtro abre N meses antes de hoje (mesmo valor do DAG,
+# MESES_DE_DEFASAGEM em airflow/dags/despesas_mensais.py)
+MESES_DE_DEFASAGEM = 3
+# primeiro mês com dado na fonte (medido em Jacareí: 2013 vem vazio, 2014-01 tem; outras
+# cidades podem começar depois)
+PRIMEIRO_MES_DA_FONTE = date(2014, 1, 1)
+
 st.set_page_config(page_title="Raio-X Público", layout="wide")
 
 
@@ -43,6 +50,13 @@ def carregar_localidades() -> pd.DataFrame:
         colunas = [c.name for c in cur.description]
         linhas = cur.fetchall()
     return pd.DataFrame(linhas, columns=colunas)
+
+
+def mes_de_defasagem(hoje: date) -> tuple[date, date]:
+    # primeiro e último dia do mês que fica MESES_DE_DEFASAGEM antes de hoje
+    ano, mes_zero_based = divmod(hoje.year * 12 + (hoje.month - 1) - MESES_DE_DEFASAGEM, 12)
+    mes = mes_zero_based + 1
+    return date(ano, mes, 1), date(ano, mes, monthrange(ano, mes)[1])
 
 
 def numero_br(valor: float, casas: int = 2) -> str:
@@ -91,8 +105,9 @@ if localidades.empty:
     )
     st.stop()
 
-# --- filtros (barra lateral): cada widget devolve o valor escolhido no rerun atual ---
-# o filtro de estado nasce dos dados: só aparece estado com município atendido pela fonte
+# --- filtros (barra lateral) ---
+# o filtro de estado nasce dos dados: só aparece estado com município atendido pela fonte.
+# Fica FORA do formulário: as cidades dependem dele e precisam mudar na hora
 estados = localidades.drop_duplicates("uf").set_index("uf")["nome_uf"]
 uf = st.sidebar.selectbox("Estado", list(estados.index), format_func=lambda u: f"{estados[u]} ({u})")
 do_estado = localidades[localidades["uf"] == uf]
@@ -108,24 +123,6 @@ def rotulo_cidade(slug: str) -> str:
     return nome_cidade(slug) + (" ✓" if slug in com_dados else "")
 
 
-# quem tem dado carregado vem primeiro; o resto, em ordem alfabética
-opcoes = sorted(nomes, key=lambda slug: (slug not in com_dados, nomes[slug]))
-cidades_sel = st.sidebar.multiselect(
-    "Cidades",
-    opcoes,
-    default=[],  # abre sem nenhuma cidade: quem usa escolhe
-    format_func=rotulo_cidade,
-    placeholder="Escolha uma ou mais cidades",
-    help="✓ = município com dados carregados.",
-)
-if not cidades_sel:
-    st.info("Escolha uma ou mais cidades na barra lateral. As marcadas com ✓ têm dados carregados.")
-    st.stop()  # interrompe o script aqui: nada abaixo é desenhado
-
-sem_dados = [nome_cidade(c) for c in cidades_sel if c not in com_dados]
-das_cidades = df[df["cidade"].isin(cidades_sel)]
-
-
 def resumo_nomes(nomes_: list[str], limite: int = 5) -> str:
     # o "Select all" pode trazer centenas de cidades sem dado: não despeja todos os nomes na tela
     if len(nomes_) <= limite:
@@ -133,44 +130,83 @@ def resumo_nomes(nomes_: list[str], limite: int = 5) -> str:
     return ", ".join(nomes_[:limite]) + f" e mais {len(nomes_) - limite}"
 
 
+# quem tem dado carregado vem primeiro; o resto, em ordem alfabética
+opcoes = sorted(nomes, key=lambda slug: (slug not in com_dados, nomes[slug]))
+hoje = date.today()
+inicio_padrao, fim_padrao = mes_de_defasagem(hoje)
+
+# dentro do formulário, mexer nos widgets não refaz a tela: só o botão Confirmar aplica
+with st.sidebar.form("filtros"):
+    cidades_sel = st.multiselect(
+        "Cidades",
+        opcoes,
+        default=[],  # abre sem nenhuma cidade: quem usa escolhe
+        format_func=rotulo_cidade,
+        placeholder="Escolha uma ou mais cidades",
+        help="✓ = município com dados carregados.",
+    )
+    intervalo = st.date_input(
+        "Período",
+        value=(inicio_padrao, fim_padrao),
+        min_value=PRIMEIRO_MES_DA_FONTE,
+        max_value=hoje,
+        format="DD/MM/YYYY",
+        help=(
+            f"Abre {MESES_DE_DEFASAGEM} meses antes de hoje, porque a fonte publica com atraso. "
+            "Os dados são mensais: vale cada mês que o intervalo toca."
+        ),
+    )
+    confirmar = st.form_submit_button("Confirmar", type="primary", width="stretch")
+
+# o botão só devolve True no clique; o que foi confirmado fica guardado entre as interações
+if confirmar:
+    if len(intervalo) != 2:  # com o calendário aberto, o usuário já clicou só na data inicial
+        st.sidebar.warning("Escolha também a data final no calendário.")
+    elif not cidades_sel:
+        st.sidebar.warning("Escolha ao menos uma cidade.")
+    else:
+        st.session_state["aplicado"] = {"uf": uf, "cidades": list(cidades_sel), "intervalo": tuple(intervalo)}
+
+aplicado = st.session_state.get("aplicado")
+if aplicado and aplicado["uf"] != uf:  # trocou de estado: o que estava confirmado era de outro
+    st.session_state.pop("aplicado")
+    aplicado = None
+if not aplicado:
+    st.info("Escolha as cidades e o período na barra lateral e clique em Confirmar. As cidades com ✓ têm dados carregados.")
+    st.stop()  # interrompe o script aqui: nada abaixo é desenhado
+
+cidades_aplicadas = aplicado["cidades"]
+periodo_ini, periodo_fim = (d.strftime("%Y-%m") for d in aplicado["intervalo"])
+
+sem_dados = [nome_cidade(c) for c in cidades_aplicadas if c not in com_dados]
+das_cidades = df[df["cidade"].isin(cidades_aplicadas)]
 if das_cidades.empty:
     st.warning("Ainda não há dados carregados para: " + resumo_nomes(sem_dados) + ".")
     st.stop()
 if sem_dados:
     st.info("Sem dados carregados, ficam de fora: " + resumo_nomes(sem_dados) + ".")
 
-# os dados são mensais ('AAAA-MM'); o calendário vai do 1º dia do primeiro mês ao último do último
-primeiro = date.fromisoformat(das_cidades["periodo"].min() + "-01")
-ultimo_ano, ultimo_mes = map(int, das_cidades["periodo"].max().split("-"))
-ultimo = date(ultimo_ano, ultimo_mes, monthrange(ultimo_ano, ultimo_mes)[1])
-# abre no mês mais recente com dado: a fonte publica com atraso, então "o mês atual" estaria vazio
-intervalo = st.sidebar.date_input(
-    "Período",
-    value=(date(ultimo_ano, ultimo_mes, 1), ultimo),
-    min_value=primeiro,
-    max_value=ultimo,
-    format="DD/MM/YYYY",
-    help="Abre no mês mais recente com dado. Os dados são mensais: vale cada mês que o intervalo toca.",
-)
-if len(intervalo) != 2:  # com o calendário aberto, o usuário já clicou só na data inicial
-    st.info("Escolha também a data final no calendário.")
-    st.stop()
-periodo_ini, periodo_fim = (d.strftime("%Y-%m") for d in intervalo)
-
+# fora do formulário: as opções dependem das cidades já confirmadas
 orgaos = sorted(das_cidades["orgao"].unique())
 orgaos_sel = st.sidebar.multiselect("Órgãos", orgaos, default=orgaos)
 
 # 'AAAA-MM' em texto ordena igual a data, então comparar strings funciona
-filtrado = das_cidades[
-    das_cidades["periodo"].between(periodo_ini, periodo_fim)
-    & das_cidades["orgao"].isin(orgaos_sel)
-]
+no_periodo = das_cidades[das_cidades["periodo"].between(periodo_ini, periodo_fim)]
+filtrado = no_periodo[no_periodo["orgao"].isin(orgaos_sel)]
 
+if no_periodo.empty:
+    meses = das_cidades["periodo"].nunique()  # a contagem, não só o intervalo: pode haver buracos
+    st.warning(
+        f"Não há dados carregados de {periodo_ini} a {periodo_fim} para essas cidades. "
+        f"Há {meses} mês(es) carregado(s), entre {das_cidades['periodo'].min()} e "
+        f"{das_cidades['periodo'].max()}. A carga sob demanda ainda não existe: o DAG carrega os meses."
+    )
+    st.stop()
 if filtrado.empty:
-    st.warning("Nenhum dado para os filtros escolhidos. Selecione ao menos um órgão.")
+    st.warning("Selecione ao menos um órgão.")
     st.stop()
 
-st.caption("Cidades: " + ", ".join(nome_cidade(c) for c in cidades_sel if c in com_dados) + " (valores somados).")
+st.caption("Cidades: " + ", ".join(nome_cidade(c) for c in cidades_aplicadas if c in com_dados) + " (valores somados).")
 
 # --- métricas ---
 for coluna, campo in zip(st.columns(3), ROTULOS):

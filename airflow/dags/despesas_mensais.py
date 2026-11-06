@@ -7,10 +7,15 @@ Execução agendada (todo dia 1º, 06:00 de São Paulo): processa o mês de TRÊ
 MESES ANTES da execução (MESES_DE_DEFASAGEM). O TCE-SP publica com atraso: em
 06/11/2026, Jacareí e Campinas tinham setembro, mas outubro e novembro vinham
 vazios. Com "mês anterior", o DAG de 1º de dezembro pediria novembro e falharia.
-Execução manual: o formulário de parâmetros permite escolher as cidades, o mês
-inicial (AAAA-MM) e quantos meses processar a partir dele.
+Execução manual: o formulário de parâmetros permite escolher as cidades (uma ou mais),
+o mês inicial (AAAA-MM) e quantos meses processar a partir dele.
+
+Não há lista fixa de cidades: as escolhidas são validadas contra a dimensão (só vale cidade que o
+TCE-SP atende) e, se nenhuma for escolhida, o DAG atualiza as cidades que já foram carregadas.
 """
+import json
 import shlex
+import subprocess
 from datetime import timedelta
 
 import pendulum
@@ -26,6 +31,23 @@ DBT_DIR = f"{PROJETO}/dbt"
 MESES_DE_DEFASAGEM = 3
 
 
+def resolver_cidades(selecionadas: list[str]) -> list[str]:
+    """Pede ao main.py (a lógica fica num lugar só) a lista final de cidades.
+
+    Valida as escolhidas contra a dimensão; sem nenhuma, devolve as já carregadas.
+    O "--" garante que um valor nunca seja lido como opção.
+    """
+    resultado = subprocess.run(
+        [f"{VENV_BIN}/python", MAIN, "cidades", "--", *selecionadas],
+        capture_output=True,
+        text=True,
+    )
+    saida = (resultado.stdout or "").strip()
+    if resultado.returncode != 0:
+        raise ValueError(saida or (resultado.stderr or "").strip() or "falha ao resolver as cidades")
+    return json.loads(saida.splitlines()[-1])
+
+
 @dag(
     dag_id="despesas_mensais",
     schedule=CronDataIntervalTimetable("0 6 1 * *", timezone="America/Sao_Paulo"),
@@ -34,10 +56,13 @@ MESES_DE_DEFASAGEM = 3
     max_active_runs=1,
     params={
         "cidades": Param(
-            ["jacarei", "campinas"],
+            [],
             type="array",
-            items={"type": "string", "pattern": "^[a-z0-9-]+$"},
-            description="Cidades a processar (minúsculas, sem acento, como a API espera).",
+            items={"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+            description=(
+                "Cidades a processar, uma ou mais (minúsculas, sem acento, como a API espera). "
+                "Vazio = as cidades que já foram carregadas."
+            ),
         ),
         "mes_inicial": Param(
             "",
@@ -75,10 +100,12 @@ def despesas_mensais():
             )
             mes = mes_zero_based + 1
 
+        cidades = resolver_cidades(params["cidades"])
+
         periodos = []
         for deslocamento in range(params["quantidade_de_meses"]):
             ano_do_periodo, mes_zero_based = divmod(ano * 12 + (mes - 1) + deslocamento, 12)
-            for cidade in params["cidades"]:
+            for cidade in cidades:
                 periodos.append({"cidade": cidade, "ano": ano_do_periodo, "mes": mes_zero_based + 1})
         return periodos
 
