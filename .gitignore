@@ -1,0 +1,16 @@
+.env
+data/raw/*.json
+!data/raw/.gitkeep
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+.vscode/
+.idea/
+
+# dbt - pastas de build/cache, geradas a cada run
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
