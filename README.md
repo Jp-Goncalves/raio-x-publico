@@ -27,6 +27,7 @@ A fase 1 fez a transformação em Python (`stg_pagamentos`). A fase 2 refez a me
 - psycopg 3 para acesso ao banco
 - dbt-core 1.12 + dbt-postgres 1.11
 - Apache Airflow 3.4 (em Docker)
+- Streamlit 1.67 (dashboard)
 
 ## Como rodar
 
@@ -106,6 +107,19 @@ O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `
 - **Manual:** o disparo aceita os parâmetros `cidades`, `mes_inicial` (AAAA-MM) e `quantidade_de_meses`. Por exemplo, `["jacarei"]`, `2020-03` e `3` processam março a maio de 2020 de uma cidade só. Dá pra testar sem ativar o DAG: `docker compose --profile airflow exec airflow-scheduler airflow dags test despesas_mensais -c '{"cidades":["jacarei"],"mes_inicial":"2020-03","quantidade_de_meses":3}'`.
 - **Histórico:** o *backfill* do Airflow repete o schedule sobre um intervalo de datas (verificado apenas em simulação, com `dry_run`).
 
+**6. Dashboard**
+
+O dashboard é um app Streamlit que lê só o mart `fct_despesas_mensais`, então o Postgres precisa estar de pé e o `dbt run` já executado. Ele tem o próprio venv e as próprias dependências, separados dos do pipeline:
+
+```bash
+python -m venv dashboard/.venv
+dashboard\.venv\Scripts\activate    # Linux/macOS: source dashboard/.venv/bin/activate
+pip install -r dashboard/requirements.txt
+streamlit run dashboard/app.py      # rode da raiz do repositório
+```
+
+Abre em http://localhost:8501, escutando só em `127.0.0.1`. Os valores de empenhado, liquidado e pago aparecem separados porque são etapas do mesmo gasto e não podem ser somados entre si.
+
 ## Estrutura
 
 ```
@@ -126,6 +140,10 @@ airflow/
   Dockerfile        imagem do Airflow + venv isolado com o requirements.txt
   dags/             DAGs (ainda vazio)
   dbt_profiles/     profile do dbt usado dentro do contêiner (lê variáveis de ambiente)
+dashboard/
+  app.py            app Streamlit (lê o mart fct_despesas_mensais)
+  requirements.txt  dependências do dashboard, separadas das do pipeline
+.streamlit/         configuração do Streamlit (sem telemetria, só localhost)
 docs/notes.md    comportamento da API e particularidades dos dados
 data/raw/        JSONs brutos (ignorados pelo git)
 ```
@@ -156,4 +174,4 @@ Projeto de estudo, parte de um roadmap de engenharia de dados (Python, PostgreSQ
 - [x] Fase 1: extract, load e transform manuais em Python, com backfill
 - [x] Fase 2: dbt com staging, mart e testes de qualidade
 - [ ] Fase 3: orquestração com Airflow (infraestrutura pronta e testada; falta o DAG mensal)
-- [ ] Dashboard (Metabase ou Streamlit)
+- [ ] Dashboard em Streamlit (passo 1 pronto: filtro de cidade e métricas; faltam gráficos, filtros de período e órgão, e o serviço no Compose)

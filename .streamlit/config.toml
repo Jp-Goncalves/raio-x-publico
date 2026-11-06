@@ -1,0 +1,7 @@
+[browser]
+# não envia estatísticas anônimas de uso
+gatherUsageStats = false
+
+[server]
+# por padrão o Streamlit escuta em todas as interfaces da máquina; aqui só local
+address = "127.0.0.1"
