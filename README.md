@@ -115,7 +115,14 @@ O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `
 
 **6. Dashboard**
 
-O dashboard é um app Streamlit que lê só o mart `fct_despesas_mensais`, então o Postgres precisa estar de pé e o `dbt run` já executado. Tem filtros de cidades (seleção múltipla, valores somados), período (calendário) e órgãos, três métricas, um gráfico de evolução mensal (uma linha por etapa do gasto), um gráfico do pago por órgão (a cor indica a cidade) e a tabela de detalhe. A lista de cidades mostra só as que já foram carregadas no banco; pra incluir outra, rode o pipeline ou o DAG pra ela. Os valores de empenhado, liquidado e pago aparecem separados porque são etapas do mesmo gasto e não podem ser somados entre si.
+O dashboard é um app Streamlit que lê só o mart `fct_despesas_mensais`, então o Postgres precisa estar de pé e o `dbt run` já executado. Os filtros, na barra lateral:
+
+- **Estado:** vem das dimensões (`dim_estado`); por enquanto só SP, que é o único estado com município atendido pela fonte.
+- **Cidades:** seleção múltipla com os municípios do estado atendidos pelo TCE-SP (`dim_municipio`), abre **sem nenhuma cidade marcada**. As com ✓ têm dados carregados e vêm primeiro; escolher uma sem dados só mostra um aviso (a carga sob demanda ainda não existe). Os valores das cidades escolhidas são somados.
+- **Período:** calendário, que abre no **mês mais recente com dado** (a fonte publica com atraso, então o mês atual estaria vazio).
+- **Órgãos.**
+
+A tela tem três métricas, um gráfico de evolução mensal (uma linha por etapa do gasto, ou barras lado a lado quando só um mês está selecionado), um gráfico do pago por órgão (a cor indica a cidade) e a tabela de detalhe. Pra carregar mais uma cidade, rode o pipeline ou o DAG pra ela. O dashboard precisa das dimensões prontas: rode `municipios SP`, `municipios-tce-sp` e `dbt run` antes. Os valores de empenhado, liquidado e pago aparecem separados porque são etapas do mesmo gasto e não podem ser somados entre si.
 
 **Em contêiner (mais simples):**
 
