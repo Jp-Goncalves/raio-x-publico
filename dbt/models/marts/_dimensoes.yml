@@ -1,0 +1,49 @@
+version: 2
+
+models:
+  - name: dim_estado
+    description: Uma linha por estado (UF) presente nos municípios carregados.
+    columns:
+      - name: codigo_uf
+        data_tests:
+          - unique
+          - not_null
+
+      - name: uf
+        description: "Sigla da UF, por exemplo SP."
+        data_tests:
+          - unique
+          - not_null
+
+      - name: nome_uf
+        data_tests:
+          - not_null
+
+  - name: dim_municipio
+    description: >
+      Uma linha por município, com o código IBGE como chave. Não use o nome
+      como chave: ele se repete entre estados.
+    columns:
+      - name: codigo_municipio
+        data_tests:
+          - unique
+          - not_null
+
+      - name: nome_municipio
+        data_tests:
+          - not_null
+
+      - name: uf
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_estado')
+                field: uf
+
+      - name: slug_nome
+        description: >
+          Nome normalizado (sem acento, minúsculas, hífens). Único dentro de uma
+          UF, não no país; o teste singular confere isso.
+        data_tests:
+          - not_null

@@ -8,3 +8,9 @@ sources:
         description: >
           JSON bruto da API de transparência do TCE-SP, um payload (array
           inteiro) por cidade+período. Carregado pelo load.py, fora do dbt.
+
+      - name: raw_ibge_municipios
+        description: >
+          Lista de municípios de uma UF, como veio da API de localidades do
+          IBGE (JSONB), uma linha por UF. Carregado por `main.py municipios`,
+          fora do dbt.

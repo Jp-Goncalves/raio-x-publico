@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: stg_ibge__municipios
+    description: >
+      Uma linha por município, explodida do payload JSONB do
+      raw_ibge_municipios, com o estado e a região já em colunas.
+    columns:
+      - name: codigo_municipio
+        description: Código IBGE de 7 dígitos. Os 2 primeiros são o código da UF.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: nome_municipio
+        data_tests:
+          - not_null
+
+      - name: codigo_uf
+        data_tests:
+          - not_null
+
+      - name: uf
+        description: Sigla da UF, lida de dentro do município (não da chave da carga).
+        data_tests:
+          - not_null
+
+      - name: uf_carga
+        description: Sigla da UF na chave do raw. Deve coincidir com `uf`.
+        data_tests:
+          - not_null

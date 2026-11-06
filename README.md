@@ -91,8 +91,10 @@ Depois, dentro da pasta `dbt/`:
 ```bash
 dbt debug    # confere projeto e conexão
 dbt run      # constrói a view de staging e a tabela do mart
-dbt test     # roda os 19 testes de qualidade
+dbt test     # roda os 39 testes de qualidade
 ```
+
+Além do mart de despesas, o dbt monta as dimensões de localidade a partir do raw do IBGE (rode `python src/main.py municipios SP` antes): `dim_estado` e `dim_municipio`, com o código IBGE como chave.
 
 **5. Airflow (orquestração)**
 
@@ -148,9 +150,9 @@ src/
   db.py          conexão com o Postgres
 sql/schema.sql   tabelas raw_pagamentos, raw_ibge_municipios e stg_pagamentos
 dbt/
-  models/staging/   stg_tce_sp__despesas (view) + source + testes
-  models/marts/     fct_despesas_mensais (table) + testes
-  tests/            testes singulares (grão único, reconciliação com o staging)
+  models/staging/   stg_tce_sp__despesas e stg_ibge__municipios (views) + sources + testes
+  models/marts/     fct_despesas_mensais, dim_estado e dim_municipio (tables) + testes
+  tests/            testes singulares (grão único, reconciliações com o staging e o raw, código IBGE x UF, slug único por UF)
 airflow/
   Dockerfile        imagem do Airflow + venv isolado com o requirements.txt
   dags/             DAG despesas_mensais
