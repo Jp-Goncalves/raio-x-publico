@@ -14,3 +14,6 @@ venv/
 dbt/target/
 dbt/dbt_packages/
 dbt/logs/
+
+# Airflow - logs das execuções
+airflow/logs/

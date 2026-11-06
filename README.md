@@ -26,6 +26,7 @@ A fase 1 fez a transformação em Python (`stg_pagamentos`). A fase 2 refez a me
 - PostgreSQL 16, via Docker Compose
 - psycopg 3 para acesso ao banco
 - dbt-core 1.12 + dbt-postgres 1.11
+- Apache Airflow 3.4 (em Docker)
 
 ## Como rodar
 
@@ -89,6 +90,16 @@ dbt run      # constrói a view de staging e a tabela do mart
 dbt test     # roda os 19 testes de qualidade
 ```
 
+**5. Airflow (orquestração)**
+
+O Airflow roda em contêineres, atrás de um *profile* do Compose, então o `docker compose up -d` simples continua subindo só o Postgres do projeto. Gere as duas chaves indicadas no `.env.example`, cole no seu `.env` e suba:
+
+```bash
+docker compose --profile airflow up -d --wait
+```
+
+A interface fica em http://127.0.0.1:8080, com usuário e senha definidos por `AIRFLOW_ADMIN_USER` e `AIRFLOW_ADMIN_PASSWORD` (`airflow`/`airflow` por padrão, só pra desenvolvimento local; a porta escuta apenas em `127.0.0.1`). A primeira subida constrói a imagem: a oficial do Airflow 3.4.0 mais um venv com o `requirements.txt`, cerca de 3,7 GB em disco. Dentro dos contêineres o banco do projeto é `postgres:5432`.
+
 ## Estrutura
 
 ```
@@ -105,6 +116,10 @@ dbt/
   models/staging/   stg_tce_sp__despesas (view) + source + testes
   models/marts/     fct_despesas_mensais (table) + testes
   tests/            testes singulares (grão único, reconciliação com o staging)
+airflow/
+  Dockerfile        imagem do Airflow + venv isolado com o requirements.txt
+  dags/             DAGs (ainda vazio)
+  dbt_profiles/     profile do dbt usado dentro do contêiner (lê variáveis de ambiente)
 docs/notes.md    comportamento da API e particularidades dos dados
 data/raw/        JSONs brutos (ignorados pelo git)
 ```
@@ -134,5 +149,5 @@ Projeto de estudo, parte de um roadmap de engenharia de dados (Python, PostgreSQ
 
 - [x] Fase 1: extract, load e transform manuais em Python, com backfill
 - [x] Fase 2: dbt com staging, mart e testes de qualidade
-- [ ] Fase 3: orquestração com Airflow (DAG mensal)
+- [ ] Fase 3: orquestração com Airflow (infraestrutura pronta e testada; falta o DAG mensal)
 - [ ] Dashboard (Metabase ou Streamlit)
