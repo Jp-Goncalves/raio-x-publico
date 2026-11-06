@@ -156,6 +156,36 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+  # --- Dashboard: suba com `docker compose --profile dashboard up -d --build` ---
+  dashboard:
+    image: raio-x-publico-dashboard:1
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    profiles: ["dashboard"]
+    restart: unless-stopped
+    environment:
+      # dentro do contêiner o Streamlit precisa escutar em 0.0.0.0, senão a porta
+      # publicada não alcança o app; quem restringe ao seu computador é o
+      # mapeamento de portas abaixo (127.0.0.1)
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:8501:8501"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:
   airflow-db-volume:

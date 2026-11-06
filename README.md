@@ -109,7 +109,17 @@ O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `
 
 **6. Dashboard**
 
-O dashboard é um app Streamlit que lê só o mart `fct_despesas_mensais`, então o Postgres precisa estar de pé e o `dbt run` já executado. Ele tem o próprio venv e as próprias dependências, separados dos do pipeline:
+O dashboard é um app Streamlit que lê só o mart `fct_despesas_mensais`, então o Postgres precisa estar de pé e o `dbt run` já executado. Tem filtros de cidade, período e órgãos, três métricas, um gráfico de evolução mensal (uma linha por etapa do gasto), um gráfico do pago por órgão e a tabela de detalhe. Os valores de empenhado, liquidado e pago aparecem separados porque são etapas do mesmo gasto e não podem ser somados entre si.
+
+**Em contêiner (mais simples):**
+
+```bash
+docker compose --profile dashboard up -d --build
+```
+
+Abre em http://localhost:8501. A porta é publicada só em `127.0.0.1`. O primeiro build baixa a imagem base e instala as dependências (a imagem final tem cerca de 850 MB).
+
+**Direto na máquina**, com venv próprio, separado do do pipeline (útil pra mexer no código com recarga automática):
 
 ```bash
 python -m venv dashboard/.venv
@@ -118,7 +128,7 @@ pip install -r dashboard/requirements.txt
 streamlit run dashboard/app.py      # rode da raiz do repositório
 ```
 
-Abre em http://localhost:8501, escutando só em `127.0.0.1`. Os valores de empenhado, liquidado e pago aparecem separados porque são etapas do mesmo gasto e não podem ser somados entre si.
+Neste modo também escuta só em `127.0.0.1` (ver `.streamlit/config.toml`). Não rode os dois ao mesmo tempo: ambos usam a porta 8501.
 
 ## Estrutura
 
@@ -138,12 +148,14 @@ dbt/
   tests/            testes singulares (grão único, reconciliação com o staging)
 airflow/
   Dockerfile        imagem do Airflow + venv isolado com o requirements.txt
-  dags/             DAGs (ainda vazio)
+  dags/             DAG despesas_mensais
   dbt_profiles/     profile do dbt usado dentro do contêiner (lê variáveis de ambiente)
 dashboard/
   app.py            app Streamlit (lê o mart fct_despesas_mensais)
+  Dockerfile        imagem do dashboard (serviço `dashboard` do Compose)
   requirements.txt  dependências do dashboard, separadas das do pipeline
 .streamlit/         configuração do Streamlit (sem telemetria, só localhost)
+.dockerignore       o que não entra no contexto de build das imagens
 docs/notes.md    comportamento da API e particularidades dos dados
 data/raw/        JSONs brutos (ignorados pelo git)
 ```
@@ -173,5 +185,5 @@ Projeto de estudo, parte de um roadmap de engenharia de dados (Python, PostgreSQ
 
 - [x] Fase 1: extract, load e transform manuais em Python, com backfill
 - [x] Fase 2: dbt com staging, mart e testes de qualidade
-- [ ] Fase 3: orquestração com Airflow (infraestrutura pronta e testada; falta o DAG mensal)
-- [ ] Dashboard em Streamlit (passo 1 pronto: filtro de cidade e métricas; faltam gráficos, filtros de período e órgão, e o serviço no Compose)
+- [x] Fase 3: orquestração com Airflow (DAG mensal `despesas_mensais`; execução agendada e backfill real ainda não exercitados, só simulados)
+- [x] Dashboard em Streamlit (filtros, gráficos e tabela; roda em contêiner pelo Compose)

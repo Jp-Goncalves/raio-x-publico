@@ -1,0 +1,14 @@
+# o contexto de build dos Dockerfiles é a raiz do repositório; isto evita
+# mandar ao Docker o que nenhuma imagem usa (e nunca copiar segredos pra dentro)
+.git
+.env
+.venv
+dashboard/.venv
+**/__pycache__
+data/raw
+airflow/logs
+dbt/target
+dbt/logs
+dbt/dbt_packages
+.vscode
+.idea

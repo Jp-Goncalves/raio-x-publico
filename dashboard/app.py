@@ -52,18 +52,65 @@ st.caption(
     "mesmo gasto, por isso aparecem separados e nunca somados entre si."
 )
 
+ROTULOS = {
+    "empenhado_liquido": "Empenhado (líquido)",
+    "liquidado": "Liquidado",
+    "pago": "Pago",
+}
+
 df = carregar_mart()
 
+# --- filtros (barra lateral): cada widget devolve o valor escolhido no rerun atual ---
 cidade = st.sidebar.selectbox("Cidade", sorted(df["cidade"].unique()))
-filtrado = df[df["cidade"] == cidade]
+da_cidade = df[df["cidade"] == cidade]
 
-col_empenho, col_liquidado, col_pago = st.columns(3)
-for coluna, rotulo, titulo in (
-    (col_empenho, "empenhado_liquido", "Empenhado (líquido)"),
-    (col_liquidado, "liquidado", "Liquidado"),
-    (col_pago, "pago", "Pago"),
-):
-    total = filtrado[rotulo].sum()
-    coluna.metric(titulo, brl_compacto(total), help=f"Valor exato: {brl(total)}")
+periodos = sorted(da_cidade["periodo"].unique())
+if len(periodos) > 1:
+    periodo_ini, periodo_fim = st.sidebar.select_slider(
+        "Período", options=periodos, value=(periodos[0], periodos[-1])
+    )
+else:
+    periodo_ini = periodo_fim = periodos[0]
 
-st.dataframe(filtrado, width="stretch", hide_index=True)
+orgaos = sorted(da_cidade["orgao"].unique())
+orgaos_sel = st.sidebar.multiselect("Órgãos", orgaos, default=orgaos)
+
+# 'AAAA-MM' em texto ordena igual a data, então comparar strings funciona
+filtrado = da_cidade[
+    da_cidade["periodo"].between(periodo_ini, periodo_fim)
+    & da_cidade["orgao"].isin(orgaos_sel)
+]
+
+if filtrado.empty:
+    st.warning("Nenhum dado para os filtros escolhidos. Selecione ao menos um órgão.")
+    st.stop()  # interrompe o script aqui: nada abaixo é desenhado
+
+# --- métricas ---
+for coluna, campo in zip(st.columns(3), ROTULOS):
+    total = filtrado[campo].sum()
+    coluna.metric(ROTULOS[campo], brl_compacto(total), help=f"Valor exato: {brl(total)}")
+
+# --- gráficos ---
+st.subheader("Evolução mensal")
+st.caption("Uma linha por etapa do gasto. As linhas não se somam: são o mesmo dinheiro em momentos diferentes.")
+evolucao = filtrado.groupby("periodo")[COLUNAS_VALOR].sum().rename(columns=ROTULOS)
+st.line_chart(evolucao)
+
+st.subheader("Pago por órgão")
+st.caption("Total pago no período escolhido.")
+por_orgao = filtrado.groupby("orgao")["pago"].sum().sort_values(ascending=False)
+st.bar_chart(por_orgao, horizontal=True)
+
+# --- tabela: o Styler formata só a exibição; os números continuam ordenáveis ---
+st.subheader("Detalhe")
+tabela = filtrado.drop(columns="cidade").rename(
+    columns={**ROTULOS, "qtd_lancamentos": "Lançamentos", "periodo": "Período", "orgao": "Órgão"}
+)
+formatos = {rotulo: brl for rotulo in ROTULOS.values()}
+st.dataframe(
+    tabela.style.format(formatos),
+    width="stretch",
+    hide_index=True,
+    # sem limite, o nome longo do órgão empurra os valores pra fora da tela
+    column_config={"Órgão": st.column_config.TextColumn(width="medium")},
+)
