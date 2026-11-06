@@ -42,8 +42,15 @@ def salvar_raw(dados: list, cidade: str, ano: int, mes: int) -> Path:
     return caminho
 
 
-def extrair(cidade: str, ano: int, mes: int) -> Path:
+def extrair(cidade: str, ano: int, mes: int, falhar_se_vazio: bool = False) -> Path:
     dados = buscar_despesas(cidade, ano, mes)
+
+    if not dados and falhar_se_vazio:
+        # nada é gravado: um [] não pode sobrescrever (via UPSERT no load) um raw bom
+        raise ValueError(
+            f"nenhum registro para {cidade}/{ano}/{mes}: a fonte pode ainda não ter "
+            f"publicado esse período"
+        )
 
     if not dados:
         print(f"[aviso] nenhum registro para {cidade}/{ano}/{mes} "

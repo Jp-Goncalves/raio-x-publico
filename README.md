@@ -100,6 +100,12 @@ docker compose --profile airflow up -d --wait
 
 A interface fica em http://127.0.0.1:8080, com usuário e senha definidos por `AIRFLOW_ADMIN_USER` e `AIRFLOW_ADMIN_PASSWORD` (`airflow`/`airflow` por padrão, só pra desenvolvimento local; a porta escuta apenas em `127.0.0.1`). A primeira subida constrói a imagem: a oficial do Airflow 3.4.0 mais um venv com o `requirements.txt`, cerca de 3,7 GB em disco. Dentro dos contêineres o banco do projeto é `postgres:5432`.
 
+O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `dbt test`) nasce **pausado**. Um disparo manual num DAG pausado fica na fila sem executar, então ative-o na interface antes de usar. Ao ativar, o Airflow cria na hora uma execução pro último mês agendado que ficou pra trás: ela processa o mês anterior à data de hoje e, se o TCE-SP ainda não publicou esse mês, a extração falha sem gravar nada e tenta de novo no dia seguinte, até 3 vezes.
+
+- **Agendado:** todo dia 1º, às 06:00 (São Paulo), processa o **mês anterior** das cidades padrão (`jacarei` e `campinas`).
+- **Manual:** o disparo aceita os parâmetros `cidades`, `mes_inicial` (AAAA-MM) e `quantidade_de_meses`. Por exemplo, `["jacarei"]`, `2020-03` e `3` processam março a maio de 2020 de uma cidade só. Dá pra testar sem ativar o DAG: `docker compose --profile airflow exec airflow-scheduler airflow dags test despesas_mensais -c '{"cidades":["jacarei"],"mes_inicial":"2020-03","quantidade_de_meses":3}'`.
+- **Histórico:** o *backfill* do Airflow repete o schedule sobre um intervalo de datas (verificado apenas em simulação, com `dry_run`).
+
 ## Estrutura
 
 ```

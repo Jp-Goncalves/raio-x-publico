@@ -18,7 +18,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Pipeline raio-x-publico")
     subparsers = parser.add_subparsers(dest="comando", required=True)
 
-    _add_cidade_ano_mes(subparsers.add_parser("extract", help="só extrai da API e salva o raw"))
+    p_extract = subparsers.add_parser("extract", help="só extrai da API e salva o raw")
+    _add_cidade_ano_mes(p_extract)
+    p_extract.add_argument(
+        "--falhar-se-vazio",
+        action="store_true",
+        help="falha (sem gravar nada) se a API devolver zero registros",
+    )
     _add_cidade_ano_mes(subparsers.add_parser("load", help="só carrega o raw salvo no Postgres"))
     _add_cidade_ano_mes(subparsers.add_parser("transform", help="só transforma e grava em stg_pagamentos"))
     _add_cidade_ano_mes(subparsers.add_parser("pipeline", help="roda extract -> load -> transform"))
@@ -28,7 +34,7 @@ def main() -> None:
 
     try:
         if args.comando == "extract":
-            extrair(args.cidade, args.ano, args.mes)
+            extrair(args.cidade, args.ano, args.mes, falhar_se_vazio=args.falhar_se_vazio)
         elif args.comando == "load":
             carregar(args.cidade, args.ano, args.mes)
         elif args.comando == "transform":
