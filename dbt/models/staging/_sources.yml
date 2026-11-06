@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: raiox
+    schema: public
+    tables:
+      - name: raw_pagamentos
+        description: >
+          JSON bruto da API de transparência do TCE-SP, um payload (array
+          inteiro) por cidade+período. Carregado pelo load.py, fora do dbt.

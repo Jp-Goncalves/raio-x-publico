@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: fct_despesas_mensais
+    description: >
+      Despesas públicas por cidade, mês e órgão, com as três etapas do gasto
+      em colunas separadas (empenho líquido, liquidado, pago). Nunca some as
+      três colunas entre si: são etapas do mesmo gasto, não gastos distintos.
+    columns:
+      - name: cidade
+        data_tests:
+          - not_null
+
+      - name: periodo
+        description: Formato AAAA-MM.
+        data_tests:
+          - not_null
+
+      - name: orgao
+        description: Órgão que realizou a despesa (Câmara, Prefeitura, autarquias etc.).
+        data_tests:
+          - not_null
+
+      - name: empenhado_liquido
+        description: >
+          Empenhado + Reforço - Anulação. Pode ser negativo num mês em que o
+          órgão anula empenhos de meses anteriores.
+        data_tests:
+          - not_null
+
+      - name: liquidado
+        data_tests:
+          - not_null
+
+      - name: pago
+        data_tests:
+          - not_null
+
+      - name: qtd_lancamentos
+        description: Quantidade de linhas do staging que entraram nessa agregação.
+        data_tests:
+          - not_null

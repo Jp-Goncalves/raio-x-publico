@@ -1,0 +1,64 @@
+version: 2
+
+models:
+  - name: stg_tce_sp__despesas
+    description: >
+      Uma linha por despesa, explodida do payload JSONB do raw_pagamentos,
+      com os tipos corrigidos (valor numérico, data como date, fornecedor
+      separado em tipo + documento).
+    columns:
+      - name: raw_pagamentos_id
+        description: Lineage - id da linha do raw_pagamentos de onde a despesa saiu.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: source('raiox', 'raw_pagamentos')
+                field: id
+
+      - name: cidade
+        data_tests:
+          - not_null
+
+      - name: periodo
+        description: Formato AAAA-MM.
+        data_tests:
+          - not_null
+
+      - name: evento
+        description: >
+          Etapa do gasto. O mart fct_despesas_mensais depende exatamente
+          desses 5 valores: se aparecer um novo, ele seria ignorado em
+          silêncio, por isso o teste abaixo falha antes disso acontecer.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'Empenhado'
+                  - 'Valor Liquidado'
+                  - 'Valor Pago'
+                  - 'Anulação'
+                  - 'Reforço'
+
+      - name: vl_despesa
+        data_tests:
+          - not_null
+
+      - name: dt_emissao_despesa
+        data_tests:
+          - not_null
+
+      - name: tipo_identificacao_fornecedor
+        description: >
+          Como o fornecedor foi identificado na API. Nem sempre é um documento
+          de fato (CNPJ); as outras categorias vêm sem CPF/CNPJ explícito.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'CNPJ'
+                  - 'PESSOA FÍSICA'
+                  - 'IDENTIFICAÇÃO ESPECIAL'
+                  - 'INSCRIÇÃO GENÉRICA-OUTROS'

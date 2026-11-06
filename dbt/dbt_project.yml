@@ -1,0 +1,24 @@
+name: 'raio_x_publico'
+version: '1.0.0'
+config-version: 2
+
+# nome do profile que o dbt vai procurar em ~/.dbt/profiles.yml
+# (profiles.yml fica FORA do repo de propósito - mesmo motivo do .env)
+profile: 'raio_x_publico'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  raio_x_publico:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
