@@ -8,9 +8,15 @@ import streamlit as st
 
 # reaproveita a conexão do pipeline em vez de duplicar (src/db.py lê o .env)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from airflow_client import AirflowIndisponivel, dag_pausado, disparar_carga, estado_da_carga  # noqa: E402
 from db import conectar  # noqa: E402
 
 COLUNAS_VALOR = ["empenhado_liquido", "liquidado", "pago"]
+
+# limites de um pedido de carga sob demanda: sem eles, o "Select all" (644 cidades) ou um
+# calendário de anos disparariam milhares de chamadas à API pública de uma vez
+LIMITE_CIDADES_POR_PEDIDO = 5
+LIMITE_MESES_POR_PEDIDO = 12
 
 # a fonte publica com atraso: o filtro abre N meses antes de hoje (mesmo valor do DAG,
 # MESES_DE_DEFASAGEM em airflow/dags/despesas_mensais.py)
@@ -175,16 +181,116 @@ if not aplicado:
     st.info("Escolha as cidades e o período na barra lateral e clique em Confirmar. As cidades com ✓ têm dados carregados.")
     st.stop()  # interrompe o script aqui: nada abaixo é desenhado
 
+
+
+def meses_do_intervalo(inicio: str, fim: str) -> list[str]:
+    # 'AAAA-MM' de inicio a fim, inclusive
+    ano, mes = map(int, inicio.split("-"))
+    ano_fim, mes_fim = map(int, fim.split("-"))
+    meses = []
+    while (ano, mes) <= (ano_fim, mes_fim):
+        meses.append(f"{ano:04d}-{mes:02d}")
+        ano, mes = (ano + 1, 1) if mes == 12 else (ano, mes + 1)
+    return meses
+
+
+# o Streamlit refaz o script a cada interação; este fragmento se refaz sozinho a cada 5 s
+# (e só ele), consultando o andamento da carga sem recarregar a tela toda
+@st.fragment(run_every="5s")
+def acompanhar_carga(run_id: str, descricao: str) -> None:
+    try:
+        estado = estado_da_carga(run_id)
+    except AirflowIndisponivel as e:
+        st.error(f"Perdi o contato com o Airflow: {e}.")
+        return
+    if estado == "success":
+        st.cache_data.clear()  # senão o dashboard seguiria mostrando a consulta antiga por 5 min
+        st.session_state["carga"]["concluida"] = True
+        st.rerun()  # redesenha a página inteira, agora com o dado
+    elif estado == "failed":
+        st.error(
+            f"A carga de {descricao} falhou. Pode ser que a fonte ainda não tenha publicado esse "
+            "período, ou que a cidade não tenha dado nele. Os detalhes estão no Airflow "
+            "(http://127.0.0.1:8080)."
+        )
+        if st.button("Tentar de novo"):
+            st.session_state.pop("carga", None)
+            st.rerun()
+    else:
+        andamento = "na fila" if estado == "queued" else "em andamento"
+        st.info(f"⏳ Carregando {descricao} ({andamento}). Esta tela atualiza sozinha quando terminar.")
+
+
+def solicitar_carga(faltando: list[str], meses: list[str]) -> None:
+    """Pede ao Airflow a carga do que falta, uma vez por pedido, e acompanha o andamento."""
+    nomes_faltando = resumo_nomes([nome_cidade(c) for c in faltando])
+    periodo = meses[0] if len(meses) == 1 else f"{meses[0]} a {meses[-1]}"
+    descricao = f"{nomes_faltando} ({periodo})"
+    chave = (tuple(sorted(faltando)), meses[0], len(meses))
+
+    ultimo_pedivel = mes_de_defasagem(hoje)[1].strftime("%Y-%m")
+    if meses[-1] > ultimo_pedivel:
+        st.warning(
+            f"Sem dados carregados para {descricao}. A fonte publica com atraso, então só peço "
+            f"cargas até {ultimo_pedivel}."
+        )
+        return
+    if len(faltando) > LIMITE_CIDADES_POR_PEDIDO:
+        st.warning(
+            f"{len(faltando)} cidades sem dados no período: o limite é {LIMITE_CIDADES_POR_PEDIDO} "
+            "por pedido. Escolha menos cidades."
+        )
+        return
+    if len(meses) > LIMITE_MESES_POR_PEDIDO:
+        st.warning(
+            f"{len(meses)} meses é mais que o limite de {LIMITE_MESES_POR_PEDIDO} por pedido. "
+            "Escolha um período menor."
+        )
+        return
+
+    carga = st.session_state.get("carga")
+    if carga and carga["chave"] == chave:  # pedido já feito nesta sessão: não dispara de novo
+        if carga.get("concluida"):
+            st.warning(
+                f"A carga terminou, mas ainda não há dados de {descricao}: a fonte pode não ter "
+                "publicado esse período."
+            )
+            return
+        acompanhar_carga(carga["run_id"], descricao)
+        return
+
+    try:
+        if dag_pausado():
+            st.warning(
+                f"Sem dados carregados para {descricao}. Pra carregar sob demanda, o DAG "
+                "`despesas_mensais` precisa estar ativo (hoje está pausado). Ative-o na interface do "
+                "Airflow (http://127.0.0.1:8080)."
+            )
+            return
+        run_id = disparar_carga(faltando, meses[0], len(meses))
+    except AirflowIndisponivel as e:
+        st.error(
+            f"Sem dados carregados para {descricao}, e não consegui pedir a carga: {e}. O Airflow "
+            "está no ar? (`docker compose --profile airflow up -d`)"
+        )
+        return
+    st.session_state["carga"] = {"chave": chave, "run_id": run_id}
+    acompanhar_carga(run_id, descricao)
+
+
 cidades_aplicadas = aplicado["cidades"]
 periodo_ini, periodo_fim = (d.strftime("%Y-%m") for d in aplicado["intervalo"])
 
-sem_dados = [nome_cidade(c) for c in cidades_aplicadas if c not in com_dados]
+# o que falta carregar: cidade sem algum dos meses pedidos
+meses_pedidos = meses_do_intervalo(periodo_ini, periodo_fim)
+carregados = df.groupby("cidade")["periodo"].agg(set).to_dict()
+faltando = [c for c in cidades_aplicadas if not set(meses_pedidos) <= carregados.get(c, set())]
+if faltando:
+    solicitar_carga(faltando, meses_pedidos)  # mostra o aviso ou o andamento da carga
+
 das_cidades = df[df["cidade"].isin(cidades_aplicadas)]
 if das_cidades.empty:
-    st.warning("Ainda não há dados carregados para: " + resumo_nomes(sem_dados) + ".")
-    st.stop()
-if sem_dados:
-    st.info("Sem dados carregados, ficam de fora: " + resumo_nomes(sem_dados) + ".")
+    st.stop()  # nada pra mostrar ainda; o aviso ou o andamento da carga já está na tela
 
 # fora do formulário: as opções dependem das cidades já confirmadas
 orgaos = sorted(das_cidades["orgao"].unique())
@@ -195,13 +301,7 @@ no_periodo = das_cidades[das_cidades["periodo"].between(periodo_ini, periodo_fim
 filtrado = no_periodo[no_periodo["orgao"].isin(orgaos_sel)]
 
 if no_periodo.empty:
-    meses = das_cidades["periodo"].nunique()  # a contagem, não só o intervalo: pode haver buracos
-    st.warning(
-        f"Não há dados carregados de {periodo_ini} a {periodo_fim} para essas cidades. "
-        f"Há {meses} mês(es) carregado(s), entre {das_cidades['periodo'].min()} e "
-        f"{das_cidades['periodo'].max()}. A carga sob demanda ainda não existe: o DAG carrega os meses."
-    )
-    st.stop()
+    st.stop()  # sem dado no período; o aviso ou o andamento da carga já está na tela
 if filtrado.empty:
     st.warning("Selecione ao menos um órgão.")
     st.stop()

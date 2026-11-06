@@ -108,7 +108,7 @@ docker compose --profile airflow up -d --wait
 
 A interface fica em http://127.0.0.1:8080, com usuário e senha definidos por `AIRFLOW_ADMIN_USER` e `AIRFLOW_ADMIN_PASSWORD` (`airflow`/`airflow` por padrão, só pra desenvolvimento local; a porta escuta apenas em `127.0.0.1`). A primeira subida constrói a imagem: a oficial do Airflow 3.4.0 mais um venv com o `requirements.txt`, cerca de 3,7 GB em disco. Dentro dos contêineres o banco do projeto é `postgres:5432`.
 
-O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `dbt test`) nasce **pausado**. Um disparo manual num DAG pausado fica na fila sem executar, então ative-o na interface antes de usar. Ao ativar, o Airflow cria na hora uma execução pro último mês agendado que ficou pra trás: ela processa o mês de três meses antes da data dessa execução e, se o TCE-SP ainda não publicou esse mês, a extração falha sem gravar nada e tenta de novo no dia seguinte, até 3 vezes.
+O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `dbt test`) nasce **pausado**. Um disparo manual num DAG pausado fica na fila sem executar, então ative-o na interface antes de usar (a carga sob demanda do dashboard também precisa dele ativo). Ao ativar, o Airflow cria na hora uma execução pro último mês agendado que ficou pra trás: ela processa o mês de três meses antes da data dessa execução e, se o TCE-SP ainda não publicou esse mês, a extração falha sem gravar nada e tenta de novo no dia seguinte, até 3 vezes.
 
 - **Agendado:** todo dia 1º, às 06:00 (São Paulo), processa o mês de **três meses antes** da execução (constante `MESES_DE_DEFASAGEM` no DAG) das cidades que **já foram carregadas** (com dado de verdade: não há lista fixa no DAG). Não é o mês anterior porque o TCE-SP publica com atraso: em 06/11/2026 as duas cidades tinham setembro, mas outubro e novembro vinham vazios.
 - **Manual:** o disparo aceita os parâmetros `cidades` (uma ou mais; vazio = as já carregadas), `mes_inicial` (AAAA-MM) e `quantidade_de_meses`. As cidades escolhidas são validadas contra `dim_municipio`: só vale cidade que o TCE-SP atende, senão a execução falha logo, com a lista das inválidas. Por exemplo, `["jacarei"]`, `2020-03` e `3` processam março a maio de 2020 de uma cidade só. Dá pra testar sem ativar o DAG: `docker compose --profile airflow exec airflow-scheduler airflow dags test despesas_mensais -c '{"cidades":["jacarei"],"mes_inicial":"2020-03","quantidade_de_meses":3}'`.
@@ -119,9 +119,18 @@ O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `
 O dashboard é um app Streamlit que lê só o mart `fct_despesas_mensais`, então o Postgres precisa estar de pé e o `dbt run` já executado. Os filtros, na barra lateral:
 
 - **Estado:** vem das dimensões (`dim_estado`); por enquanto só SP, que é o único estado com município atendido pela fonte.
-- **Cidades:** seleção múltipla com os municípios do estado atendidos pelo TCE-SP (`dim_municipio`), abre **sem nenhuma cidade marcada**. As com ✓ têm dados carregados e vêm primeiro; escolher uma sem dados só mostra um aviso (a carga sob demanda ainda não existe). Os valores das cidades escolhidas são somados.
+- **Cidades:** seleção múltipla com os municípios do estado atendidos pelo TCE-SP (`dim_municipio`), abre **sem nenhuma cidade marcada**. As com ✓ têm dados carregados e vêm primeiro; escolher uma sem dado no período dispara a carga sob demanda (ver abaixo). Os valores das cidades escolhidas são somados.
 - **Período:** calendário, que abre **três meses antes de hoje** (a fonte publica com atraso, então o mês atual estaria vazio) e vai de janeiro de 2014, o primeiro mês que a fonte tem (medido em Jacareí; outras cidades podem começar depois), até hoje. Se o período não tiver dado carregado, a tela avisa e diz quantos meses existem.
 - **Confirmar:** cidades e período ficam num formulário: mexer neles não muda a tela, só o botão **Confirmar** aplica. O estado fica fora do formulário (as cidades dependem dele) e o filtro de órgãos vem depois, já sobre o que foi confirmado.
+
+**Carga sob demanda.** Ao confirmar uma cidade e um período sem dado carregado, o dashboard **não grava no banco**: pede ao Airflow, pela API, uma execução do DAG `despesas_mensais` só pra essa cidade e esses meses. A tela mostra o andamento ("na fila", "em andamento"), consulta o Airflow a cada 5 segundos e se atualiza sozinha quando a carga termina. O que isso exige e como se comporta:
+
+- O **Airflow precisa estar no ar** (`--profile airflow`) e o DAG **ativo** (não pausado); senão a tela avisa o que fazer, em vez de enfileirar um pedido que nunca roda.
+- O dashboard usa um **usuário restrito do Airflow** (`DASHBOARD_AIRFLOW_USER`, papel `Op`: dispara execuções, não administra), e não o administrador. O `airflow-init` cria o usuário quando `DASHBOARD_AIRFLOW_PASSWORD` está preenchida no `.env`.
+- **Limites por pedido**: até 5 cidades e 12 meses, e só meses até três meses antes de hoje (a fonte publica com atraso); acima disso a tela explica e não dispara nada. Sem eles, o "Select all" (644 cidades) dispararia milhares de chamadas à API pública.
+- **Sem pedidos duplicados**: o pedido tem um identificador determinístico (cidades, mês inicial e quantidade), e o Airflow recusa repetido. Dois cliques, ou duas pessoas pedindo o mesmo, acompanham a mesma execução. Se ela falhou, o botão **Tentar de novo** cria uma nova.
+- Uma cidade carregada uma vez **passa a entrar na atualização mensal** do DAG (que atualiza as cidades já carregadas), sem limite de quantas.
+- Um mês que a fonte não tem pra aquela cidade faz a extração falhar e tentar de novo no dia seguinte (até 3 vezes), então a tela pode ficar mostrando "em andamento" por dias antes de dar "falhou".
 - **Órgãos.**
 
 A tela tem três métricas, um gráfico de evolução mensal (uma linha por etapa do gasto, ou barras lado a lado quando só um mês está selecionado), um gráfico do pago por órgão (a cor indica a cidade) e a tabela de detalhe. Pra carregar mais uma cidade, rode o pipeline ou o DAG pra ela. O dashboard precisa das dimensões prontas: rode `municipios SP`, `municipios-tce-sp` e `dbt run` antes. Os valores de empenhado, liquidado e pago aparecem separados porque são etapas do mesmo gasto e não podem ser somados entre si.
@@ -152,6 +161,7 @@ src/
   main.py        único ponto de entrada (subcomandos)
   pipeline.py    rodar_pipeline: extract -> load -> transform
   api_client.py  GET com retry e backoff, compartilhado pelas duas APIs
+  airflow_client.py  API do Airflow: o dashboard pede cargas sob demanda por aqui
   extract.py     chama a API de despesas e salva o JSON bruto
   municipios.py  carrega os municípios do IBGE e a lista do TCE-SP nas tabelas raw
   load.py        UPSERT do JSON bruto em raw_pagamentos

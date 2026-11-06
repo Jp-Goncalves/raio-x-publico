@@ -83,6 +83,13 @@ services:
       - |
         mkdir -p /opt/airflow/logs /opt/airflow/dags
         /entrypoint airflow version
+        # usuário restrito (papel Op: dispara execuções, não administra) que o dashboard usa
+        # pra pedir cargas sob demanda. "|| true": se já existir, o comando reclama e segue
+        if [ -n "$${DASHBOARD_AIRFLOW_PASSWORD}" ]; then
+          airflow users create --username "$${DASHBOARD_AIRFLOW_USER}" --firstname Dashboard \
+            --lastname Raiox --role Op --email dashboard@example.com \
+            --password "$${DASHBOARD_AIRFLOW_PASSWORD}" || true
+        fi
         chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/logs /opt/airflow/dags || true
     environment:
       <<: *airflow-common-env
@@ -90,6 +97,8 @@ services:
       _AIRFLOW_WWW_USER_CREATE: "true"
       _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-airflow}
       _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflow}
+      DASHBOARD_AIRFLOW_USER: ${DASHBOARD_AIRFLOW_USER:-dashboard}
+      DASHBOARD_AIRFLOW_PASSWORD: ${DASHBOARD_AIRFLOW_PASSWORD:-}
     user: "0:0"
 
   airflow-apiserver:
@@ -174,6 +183,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      # cargas sob demanda: o dashboard pede ao Airflow (se o profile airflow estiver no ar)
+      AIRFLOW_API_URL: http://airflow-apiserver:8080
+      DASHBOARD_AIRFLOW_USER: ${DASHBOARD_AIRFLOW_USER:-dashboard}
+      DASHBOARD_AIRFLOW_PASSWORD: ${DASHBOARD_AIRFLOW_PASSWORD:-}
     ports:
       - "127.0.0.1:8501:8501"
     healthcheck:
