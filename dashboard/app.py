@@ -1,4 +1,6 @@
 import sys
+from calendar import monthrange
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -58,32 +60,59 @@ ROTULOS = {
     "pago": "Pago",
 }
 
+# nomes de exibição (a API usa minúsculas sem acento); cidade nova cai no .title()
+NOMES = {"jacarei": "Jacareí", "campinas": "Campinas"}
+
+
+def nome_cidade(cidade: str) -> str:
+    return NOMES.get(cidade, cidade.title())
+
+
 df = carregar_mart()
 
 # --- filtros (barra lateral): cada widget devolve o valor escolhido no rerun atual ---
-cidade = st.sidebar.selectbox("Cidade", sorted(df["cidade"].unique()))
-da_cidade = df[df["cidade"] == cidade]
+cidades_sel = st.sidebar.multiselect(
+    "Cidades",
+    sorted(df["cidade"].unique()),
+    default=sorted(df["cidade"].unique()),
+    format_func=nome_cidade,
+)
+if not cidades_sel:
+    st.warning("Selecione ao menos uma cidade na barra lateral.")
+    st.stop()  # interrompe o script aqui: nada abaixo é desenhado
+das_cidades = df[df["cidade"].isin(cidades_sel)]
 
-periodos = sorted(da_cidade["periodo"].unique())
-if len(periodos) > 1:
-    periodo_ini, periodo_fim = st.sidebar.select_slider(
-        "Período", options=periodos, value=(periodos[0], periodos[-1])
-    )
-else:
-    periodo_ini = periodo_fim = periodos[0]
+# os dados são mensais ('AAAA-MM'); o calendário vai do 1º dia do primeiro mês ao último do último
+primeiro = date.fromisoformat(das_cidades["periodo"].min() + "-01")
+ultimo_ano, ultimo_mes = map(int, das_cidades["periodo"].max().split("-"))
+ultimo = date(ultimo_ano, ultimo_mes, monthrange(ultimo_ano, ultimo_mes)[1])
+intervalo = st.sidebar.date_input(
+    "Período",
+    value=(primeiro, ultimo),
+    min_value=primeiro,
+    max_value=ultimo,
+    format="DD/MM/YYYY",
+    help="Os dados são mensais: vale cada mês que o intervalo toca.",
+)
+if len(intervalo) != 2:  # com o calendário aberto, o usuário já clicou só na data inicial
+    st.info("Escolha também a data final no calendário.")
+    st.stop()
+periodo_ini, periodo_fim = (d.strftime("%Y-%m") for d in intervalo)
 
-orgaos = sorted(da_cidade["orgao"].unique())
+orgaos = sorted(das_cidades["orgao"].unique())
 orgaos_sel = st.sidebar.multiselect("Órgãos", orgaos, default=orgaos)
 
 # 'AAAA-MM' em texto ordena igual a data, então comparar strings funciona
-filtrado = da_cidade[
-    da_cidade["periodo"].between(periodo_ini, periodo_fim)
-    & da_cidade["orgao"].isin(orgaos_sel)
+filtrado = das_cidades[
+    das_cidades["periodo"].between(periodo_ini, periodo_fim)
+    & das_cidades["orgao"].isin(orgaos_sel)
 ]
 
 if filtrado.empty:
     st.warning("Nenhum dado para os filtros escolhidos. Selecione ao menos um órgão.")
-    st.stop()  # interrompe o script aqui: nada abaixo é desenhado
+    st.stop()
+
+st.caption("Cidades: " + ", ".join(nome_cidade(c) for c in cidades_sel) + " (valores somados).")
 
 # --- métricas ---
 for coluna, campo in zip(st.columns(3), ROTULOS):
@@ -97,14 +126,24 @@ evolucao = filtrado.groupby("periodo")[COLUNAS_VALOR].sum().rename(columns=ROTUL
 st.line_chart(evolucao)
 
 st.subheader("Pago por órgão")
-st.caption("Total pago no período escolhido.")
-por_orgao = filtrado.groupby("orgao")["pago"].sum().sort_values(ascending=False)
-st.bar_chart(por_orgao, horizontal=True)
+st.caption("Total pago no período escolhido. A cor indica a cidade.")
+por_orgao = (
+    filtrado.assign(cidade=filtrado["cidade"].map(nome_cidade))
+    .groupby(["orgao", "cidade"], as_index=False)["pago"]
+    .sum()
+)
+st.bar_chart(por_orgao, x="orgao", y="pago", color="cidade", horizontal=True)
 
 # --- tabela: o Styler formata só a exibição; os números continuam ordenáveis ---
 st.subheader("Detalhe")
-tabela = filtrado.drop(columns="cidade").rename(
-    columns={**ROTULOS, "qtd_lancamentos": "Lançamentos", "periodo": "Período", "orgao": "Órgão"}
+tabela = filtrado.assign(cidade=filtrado["cidade"].map(nome_cidade)).rename(
+    columns={
+        **ROTULOS,
+        "qtd_lancamentos": "Lançamentos",
+        "cidade": "Cidade",
+        "periodo": "Período",
+        "orgao": "Órgão",
+    }
 )
 formatos = {rotulo: brl for rotulo in ROTULOS.values()}
 st.dataframe(

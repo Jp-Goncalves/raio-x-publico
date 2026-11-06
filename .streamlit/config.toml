@@ -5,3 +5,10 @@ gatherUsageStats = false
 [server]
 # por padrão o Streamlit escuta em todas as interfaces da máquina; aqui só local
 address = "127.0.0.1"
+
+[theme]
+# o padrão do Streamlit é um vermelho forte (#c53948), que pinta filtros e botões
+primaryColor = "#3b7ea1"
+# cores dos gráficos, na ordem: azul, âmbar, verde-água, roxo, terracota suave, cinza
+# (o padrão põe um vermelho vivo, #ff2b2b, como terceira cor)
+chartCategoricalColors = ["#3b7ea1", "#d9a441", "#3fa58d", "#8b6fb3", "#c9775f", "#7f8c99"]

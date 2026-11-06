@@ -109,7 +109,7 @@ O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `
 
 **6. Dashboard**
 
-O dashboard é um app Streamlit que lê só o mart `fct_despesas_mensais`, então o Postgres precisa estar de pé e o `dbt run` já executado. Tem filtros de cidade, período e órgãos, três métricas, um gráfico de evolução mensal (uma linha por etapa do gasto), um gráfico do pago por órgão e a tabela de detalhe. Os valores de empenhado, liquidado e pago aparecem separados porque são etapas do mesmo gasto e não podem ser somados entre si.
+O dashboard é um app Streamlit que lê só o mart `fct_despesas_mensais`, então o Postgres precisa estar de pé e o `dbt run` já executado. Tem filtros de cidades (seleção múltipla, valores somados), período (calendário) e órgãos, três métricas, um gráfico de evolução mensal (uma linha por etapa do gasto), um gráfico do pago por órgão (a cor indica a cidade) e a tabela de detalhe. A lista de cidades mostra só as que já foram carregadas no banco; pra incluir outra, rode o pipeline ou o DAG pra ela. Os valores de empenhado, liquidado e pago aparecem separados porque são etapas do mesmo gasto e não podem ser somados entre si.
 
 **Em contêiner (mais simples):**
 
