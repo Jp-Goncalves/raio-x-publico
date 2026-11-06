@@ -61,8 +61,11 @@ Há um único ponto de entrada, `src/main.py`, com subcomandos:
 | `python src/main.py transform <cidade> <ano> <mes>` | Trata e grava em `stg_pagamentos` |
 | `python src/main.py pipeline <cidade> <ano> <mes>` | Roda extract, load e transform em sequência |
 | `python src/main.py backfill` | Roda o pipeline pra vários períodos (lista em `src/backfill.py`) |
+| `python src/main.py municipios <UF>` | Carrega os municípios de uma UF (API de localidades do IBGE) em `raw_ibge_municipios` |
 
 Exemplo: `python src/main.py pipeline jacarei 2020 1`. A cidade é o nome em minúsculas, sem acento, como a API espera.
+
+Os municípios são dado de referência e mudam raramente, então ficam fora do pipeline mensal: rode `municipios SP` uma vez (e de novo se quiser atualizar). A tabela guarda uma linha por UF; outro estado é só mais uma linha. O código IBGE de 7 dígitos é a chave de um município: o nome não serve, porque se repete entre estados. Se o banco já existia antes dessa tabela, aplique só o `CREATE TABLE` dela do `sql/schema.sql`, sem recriar o volume.
 
 **4. dbt**
 
@@ -136,12 +139,14 @@ Neste modo também escuta só em `127.0.0.1` (ver `.streamlit/config.toml`). Nã
 src/
   main.py        único ponto de entrada (subcomandos)
   pipeline.py    rodar_pipeline: extract -> load -> transform
-  extract.py     chama a API, com retry, e salva o JSON bruto
+  api_client.py  GET com retry e backoff, compartilhado pelas duas APIs
+  extract.py     chama a API de despesas e salva o JSON bruto
+  municipios.py  carrega os municípios do IBGE em raw_ibge_municipios
   load.py        UPSERT do JSON bruto em raw_pagamentos
   transform.py   conversão de tipos e gravação em stg_pagamentos
   backfill.py    carga histórica de várias cidades e meses
   db.py          conexão com o Postgres
-sql/schema.sql   tabelas raw_pagamentos e stg_pagamentos
+sql/schema.sql   tabelas raw_pagamentos, raw_ibge_municipios e stg_pagamentos
 dbt/
   models/staging/   stg_tce_sp__despesas (view) + source + testes
   models/marts/     fct_despesas_mensais (table) + testes

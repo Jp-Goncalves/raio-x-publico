@@ -15,6 +15,15 @@ CREATE TABLE IF NOT EXISTS raw_pagamentos (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_pagamentos_cidade_periodo
     ON raw_pagamentos (cidade, periodo);
 
+-- Tabela raw dos municípios (API de localidades do IBGE): uma linha por UF, com a
+-- lista inteira de municípios da UF em JSONB. Adicionar outro estado é só mais uma
+-- linha, sem mudar a tabela. O UPSERT por uf torna a recarga idempotente.
+CREATE TABLE IF NOT EXISTS raw_ibge_municipios (
+    uf TEXT PRIMARY KEY CHECK (uf ~ '^[A-Z]{2}$'), -- sigla, ex.: 'SP'
+    payload JSONB NOT NULL,
+    extracted_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- Tabela staging: uma linha por despesa (o raw explode o array em linhas),
 -- já com os tipos corrigidos. Sem UNIQUE por linha porque a API não manda
 -- nenhum id de despesa - a idempotência aqui é por partição inteira

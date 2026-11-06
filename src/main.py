@@ -4,6 +4,7 @@ import sys
 from backfill import rodar_backfill
 from extract import extrair
 from load import carregar
+from municipios import carregar_municipios
 from pipeline import rodar_pipeline
 from transform import transformar_e_gravar
 
@@ -29,6 +30,10 @@ def main() -> None:
     _add_cidade_ano_mes(subparsers.add_parser("transform", help="só transforma e grava em stg_pagamentos"))
     _add_cidade_ano_mes(subparsers.add_parser("pipeline", help="roda extract -> load -> transform"))
     subparsers.add_parser("backfill", help="roda o pipeline pra vários períodos passados")
+    p_municipios = subparsers.add_parser(
+        "municipios", help="carrega os municípios de uma UF (API do IBGE) em raw_ibge_municipios"
+    )
+    p_municipios.add_argument("uf", help="sigla da UF, ex.: SP")
 
     args = parser.parse_args()
 
@@ -43,6 +48,8 @@ def main() -> None:
             rodar_pipeline(args.cidade, args.ano, args.mes)
         elif args.comando == "backfill":
             rodar_backfill()
+        elif args.comando == "municipios":
+            carregar_municipios(args.uf)
     except Exception as e:
         print(f"\n[erro] comando '{args.comando}' falhou: {e}")
         sys.exit(1)
