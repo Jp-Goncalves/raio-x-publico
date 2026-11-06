@@ -14,3 +14,9 @@ sources:
           Lista de municípios de uma UF, como veio da API de localidades do
           IBGE (JSONB), uma linha por UF. Carregado por `main.py municipios`,
           fora do dbt.
+
+      - name: raw_tce_sp_municipios
+        description: >
+          Lista de municípios que o TCE-SP atende (endpoint /municipios da API
+          de transparência), uma linha só. Carregado por
+          `main.py municipios-tce-sp`, fora do dbt.

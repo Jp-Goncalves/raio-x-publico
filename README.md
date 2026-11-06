@@ -62,6 +62,7 @@ Há um único ponto de entrada, `src/main.py`, com subcomandos:
 | `python src/main.py pipeline <cidade> <ano> <mes>` | Roda extract, load e transform em sequência |
 | `python src/main.py backfill` | Roda o pipeline pra vários períodos (lista em `src/backfill.py`) |
 | `python src/main.py municipios <UF>` | Carrega os municípios de uma UF (API de localidades do IBGE) em `raw_ibge_municipios` |
+| `python src/main.py municipios-tce-sp` | Carrega a lista de municípios que o TCE-SP atende em `raw_tce_sp_municipios` |
 
 Exemplo: `python src/main.py pipeline jacarei 2020 1`. A cidade é o nome em minúsculas, sem acento, como a API espera.
 
@@ -91,10 +92,10 @@ Depois, dentro da pasta `dbt/`:
 ```bash
 dbt debug    # confere projeto e conexão
 dbt run      # constrói a view de staging e a tabela do mart
-dbt test     # roda os 39 testes de qualidade
+dbt test     # roda os 45 testes de qualidade
 ```
 
-Além do mart de despesas, o dbt monta as dimensões de localidade a partir do raw do IBGE (rode `python src/main.py municipios SP` antes): `dim_estado` e `dim_municipio`, com o código IBGE como chave.
+Além do mart de despesas, o dbt monta as dimensões de localidade a partir do raw do IBGE (rode `python src/main.py municipios SP` antes): `dim_estado` e `dim_municipio`, com o código IBGE como chave. Pra ligar cada município ao nome que a API de despesas espera, rode também `python src/main.py municipios-tce-sp` (lista de municípios que o TCE-SP atende): a coluna `slug_tce_sp` da `dim_municipio` fica preenchida nos 644 que o TCE-SP atende e vazia nos demais (hoje, só a capital, que é do TCM-SP). O cruzamento só vale para municípios de SP, pra um nome repetido em outro estado não casar por engano.
 
 **5. Airflow (orquestração)**
 
@@ -106,9 +107,9 @@ docker compose --profile airflow up -d --wait
 
 A interface fica em http://127.0.0.1:8080, com usuário e senha definidos por `AIRFLOW_ADMIN_USER` e `AIRFLOW_ADMIN_PASSWORD` (`airflow`/`airflow` por padrão, só pra desenvolvimento local; a porta escuta apenas em `127.0.0.1`). A primeira subida constrói a imagem: a oficial do Airflow 3.4.0 mais um venv com o `requirements.txt`, cerca de 3,7 GB em disco. Dentro dos contêineres o banco do projeto é `postgres:5432`.
 
-O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `dbt test`) nasce **pausado**. Um disparo manual num DAG pausado fica na fila sem executar, então ative-o na interface antes de usar. Ao ativar, o Airflow cria na hora uma execução pro último mês agendado que ficou pra trás: ela processa o mês anterior à data de hoje e, se o TCE-SP ainda não publicou esse mês, a extração falha sem gravar nada e tenta de novo no dia seguinte, até 3 vezes.
+O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `dbt test`) nasce **pausado**. Um disparo manual num DAG pausado fica na fila sem executar, então ative-o na interface antes de usar. Ao ativar, o Airflow cria na hora uma execução pro último mês agendado que ficou pra trás: ela processa o mês de três meses antes da data dessa execução e, se o TCE-SP ainda não publicou esse mês, a extração falha sem gravar nada e tenta de novo no dia seguinte, até 3 vezes.
 
-- **Agendado:** todo dia 1º, às 06:00 (São Paulo), processa o **mês anterior** das cidades padrão (`jacarei` e `campinas`).
+- **Agendado:** todo dia 1º, às 06:00 (São Paulo), processa o mês de **três meses antes** da execução (constante `MESES_DE_DEFASAGEM` no DAG) das cidades padrão (`jacarei` e `campinas`). Não é o mês anterior porque o TCE-SP publica com atraso: em 06/11/2026 as duas cidades tinham setembro, mas outubro e novembro vinham vazios.
 - **Manual:** o disparo aceita os parâmetros `cidades`, `mes_inicial` (AAAA-MM) e `quantidade_de_meses`. Por exemplo, `["jacarei"]`, `2020-03` e `3` processam março a maio de 2020 de uma cidade só. Dá pra testar sem ativar o DAG: `docker compose --profile airflow exec airflow-scheduler airflow dags test despesas_mensais -c '{"cidades":["jacarei"],"mes_inicial":"2020-03","quantidade_de_meses":3}'`.
 - **Histórico:** o *backfill* do Airflow repete o schedule sobre um intervalo de datas (verificado apenas em simulação, com `dry_run`).
 
@@ -143,14 +144,14 @@ src/
   pipeline.py    rodar_pipeline: extract -> load -> transform
   api_client.py  GET com retry e backoff, compartilhado pelas duas APIs
   extract.py     chama a API de despesas e salva o JSON bruto
-  municipios.py  carrega os municípios do IBGE em raw_ibge_municipios
+  municipios.py  carrega os municípios do IBGE e a lista do TCE-SP nas tabelas raw
   load.py        UPSERT do JSON bruto em raw_pagamentos
   transform.py   conversão de tipos e gravação em stg_pagamentos
   backfill.py    carga histórica de várias cidades e meses
   db.py          conexão com o Postgres
-sql/schema.sql   tabelas raw_pagamentos, raw_ibge_municipios e stg_pagamentos
+sql/schema.sql   tabelas raw_pagamentos, raw_ibge_municipios, raw_tce_sp_municipios e stg_pagamentos
 dbt/
-  models/staging/   stg_tce_sp__despesas e stg_ibge__municipios (views) + sources + testes
+  models/staging/   stg_tce_sp__despesas, stg_ibge__municipios e stg_tce_sp__municipios (views) + sources + testes
   models/marts/     fct_despesas_mensais, dim_estado e dim_municipio (tables) + testes
   tests/            testes singulares (grão único, reconciliações com o staging e o raw, código IBGE x UF, slug único por UF)
 airflow/

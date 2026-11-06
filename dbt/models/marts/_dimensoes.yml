@@ -47,3 +47,11 @@ models:
           UF, não no país; o teste singular confere isso.
         data_tests:
           - not_null
+
+      - name: slug_tce_sp
+        description: >
+          Nome que a API de despesas do TCE-SP espera. Vazio quando o TCE-SP não
+          atende o município (outros estados e a capital paulista). Quando
+          preenchido, é único.
+        data_tests:
+          - unique

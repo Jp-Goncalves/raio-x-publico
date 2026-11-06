@@ -4,7 +4,7 @@ import sys
 from backfill import rodar_backfill
 from extract import extrair
 from load import carregar
-from municipios import carregar_municipios
+from municipios import carregar_municipios, carregar_municipios_tce_sp
 from pipeline import rodar_pipeline
 from transform import transformar_e_gravar
 
@@ -34,6 +34,10 @@ def main() -> None:
         "municipios", help="carrega os municípios de uma UF (API do IBGE) em raw_ibge_municipios"
     )
     p_municipios.add_argument("uf", help="sigla da UF, ex.: SP")
+    subparsers.add_parser(
+        "municipios-tce-sp",
+        help="carrega a lista de municípios que o TCE-SP atende em raw_tce_sp_municipios",
+    )
 
     args = parser.parse_args()
 
@@ -50,6 +54,8 @@ def main() -> None:
             rodar_backfill()
         elif args.comando == "municipios":
             carregar_municipios(args.uf)
+        elif args.comando == "municipios-tce-sp":
+            carregar_municipios_tce_sp()
     except Exception as e:
         print(f"\n[erro] comando '{args.comando}' falhou: {e}")
         sys.exit(1)

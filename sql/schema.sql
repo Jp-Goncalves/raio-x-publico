@@ -24,6 +24,16 @@ CREATE TABLE IF NOT EXISTS raw_ibge_municipios (
     extracted_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- Lista de municípios que o TCE-SP atende (endpoint /municipios da API de
+-- transparência): [{"municipio": "jacarei", "municipio_extenso": "Jacareí"}, ...].
+-- Uma linha só (id fixo em 1): é uma lista única, recarregada por inteiro.
+-- Serve pra ligar o município do IBGE ao nome que a API de despesas espera.
+CREATE TABLE IF NOT EXISTS raw_tce_sp_municipios (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    payload JSONB NOT NULL,
+    extracted_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- Tabela staging: uma linha por despesa (o raw explode o array em linhas),
 -- já com os tipos corrigidos. Sem UNIQUE por linha porque a API não manda
 -- nenhum id de despesa - a idempotência aqui é por partição inteira

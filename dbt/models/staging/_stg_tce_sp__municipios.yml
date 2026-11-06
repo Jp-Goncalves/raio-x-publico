@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: stg_tce_sp__municipios
+    description: >
+      Uma linha por município que o TCE-SP atende, com o nome que a API de
+      despesas espera (slug) e o nome por extenso.
+    columns:
+      - name: slug
+        description: Nome na URL da API de despesas, ex. jacarei, santa-barbara-d-oeste.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: nome_extenso
+        data_tests:
+          - not_null

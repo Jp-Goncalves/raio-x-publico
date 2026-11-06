@@ -3,7 +3,10 @@
 Cada tarefa chama o mesmo main.py do projeto, pelo venv isolado da imagem, então
 a lógica fica num lugar só.
 
-Execução agendada (todo dia 1º, 06:00 de São Paulo): processa o MÊS ANTERIOR.
+Execução agendada (todo dia 1º, 06:00 de São Paulo): processa o mês de TRÊS
+MESES ANTES da execução (MESES_DE_DEFASAGEM). O TCE-SP publica com atraso: em
+06/11/2026, Jacareí e Campinas tinham setembro, mas outubro e novembro vinham
+vazios. Com "mês anterior", o DAG de 1º de dezembro pediria novembro e falharia.
 Execução manual: o formulário de parâmetros permite escolher as cidades, o mês
 inicial (AAAA-MM) e quantos meses processar a partir dele.
 """
@@ -18,6 +21,9 @@ VENV_BIN = "/home/airflow/project-venv/bin"
 PROJETO = "/opt/airflow/project"
 MAIN = f"{PROJETO}/src/main.py"
 DBT_DIR = f"{PROJETO}/dbt"
+
+# quantos meses antes da execução fica o período processado quando o mês inicial vem vazio
+MESES_DE_DEFASAGEM = 3
 
 
 @dag(
@@ -37,7 +43,10 @@ DBT_DIR = f"{PROJETO}/dbt"
             "",
             type="string",
             pattern=r"^(\d{4}-(0[1-9]|1[0-2]))?$",
-            description="Primeiro mês, no formato AAAA-MM. Vazio = o mês anterior à execução.",
+            description=(
+                "Primeiro mês, no formato AAAA-MM. Vazio = "
+                f"{MESES_DE_DEFASAGEM} meses antes da execução (a fonte publica com atraso)."
+            ),
         ),
         "quantidade_de_meses": Param(
             1,
@@ -60,8 +69,11 @@ def despesas_mensais():
         else:
             dag_run = context["dag_run"]
             referencia = dag_run.data_interval_end or dag_run.run_after
-            ultimo_dia_do_mes_anterior = referencia.replace(day=1) - timedelta(days=1)
-            ano, mes = ultimo_dia_do_mes_anterior.year, ultimo_dia_do_mes_anterior.month
+            # meses desde o ano 0, base zero: dezembro/2026 menos 3 = setembro/2026
+            ano, mes_zero_based = divmod(
+                referencia.year * 12 + (referencia.month - 1) - MESES_DE_DEFASAGEM, 12
+            )
+            mes = mes_zero_based + 1
 
         periodos = []
         for deslocamento in range(params["quantidade_de_meses"]):
