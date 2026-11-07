@@ -3,7 +3,7 @@ import json
 import sys
 
 from backfill import rodar_backfill
-from extract import extrair
+from extract import SemDadosNaFonte, extrair
 from load import carregar
 from municipios import (
     carregar_municipios,
@@ -13,6 +13,10 @@ from municipios import (
 )
 from pipeline import rodar_pipeline
 from transform import transformar_e_gravar
+
+
+# o Airflow (BashOperator) marca a tarefa como "pulada", e não como falha, quando ela sai com 99
+CODIGO_SAIDA_SEM_DADOS = 99
 
 
 def _add_cidade_ano_mes(subparser: argparse.ArgumentParser) -> None:
@@ -54,6 +58,14 @@ def main() -> None:
         action="store_true",
         help="falha (sem gravar nada) se a API devolver zero registros",
     )
+    p_extract.add_argument(
+        "--pular-se-vazio",
+        action="store_true",
+        help=(
+            f"se a API devolver zero registros, não grava nada e sai com o código {CODIGO_SAIDA_SEM_DADOS}, "
+            "que o Airflow trata como tarefa pulada (não como falha)"
+        ),
+    )
     _add_cidade_ano_mes(subparsers.add_parser("load", help="só carrega o raw salvo no Postgres"))
     _add_cidade_ano_mes(subparsers.add_parser("transform", help="só transforma e grava em stg_pagamentos"))
     _add_cidade_ano_mes(subparsers.add_parser("pipeline", help="roda extract -> load -> transform"))
@@ -80,7 +92,13 @@ def main() -> None:
 
     try:
         if args.comando == "extract":
-            extrair(args.cidade, args.ano, args.mes, falhar_se_vazio=args.falhar_se_vazio)
+            extrair(
+                args.cidade,
+                args.ano,
+                args.mes,
+                falhar_se_vazio=args.falhar_se_vazio,
+                pular_se_vazio=args.pular_se_vazio,
+            )
         elif args.comando == "load":
             carregar(args.cidade, args.ano, args.mes)
         elif args.comando == "transform":
@@ -95,6 +113,9 @@ def main() -> None:
             carregar_municipios_tce_sp()
         elif args.comando == "cidades":
             imprimir_cidades(args.cidades)
+    except SemDadosNaFonte as e:
+        print(f"\n[sem dados] {e}")
+        sys.exit(CODIGO_SAIDA_SEM_DADOS)
     except Exception as e:
         print(f"\n[erro] comando '{args.comando}' falhou: {e}")
         sys.exit(1)

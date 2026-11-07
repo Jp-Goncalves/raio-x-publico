@@ -238,7 +238,23 @@ def acompanhar_carga(run_id: str, descricao: str) -> None:
         st.rerun()
 
 
-def solicitar_carga(faltando: list[str], meses: list[str]) -> None:
+def resumo_meses(meses_: list[str], limite: int = 4) -> str:
+    if len(meses_) <= limite:
+        return ", ".join(meses_)
+    return ", ".join(meses_[:limite]) + f" e mais {len(meses_) - limite}"
+
+
+def lacunas(faltando: list[str], meses: list[str], carregados: dict) -> str:
+    # quais meses de quais cidades continuam sem dado: "Amparo: 2026-05; Lorena: 2026-05, 2026-06"
+    partes = []
+    for cidade in faltando:
+        ausentes = [m for m in meses if m not in carregados.get(cidade, set())]
+        if ausentes:
+            partes.append(f"{nome_cidade(cidade)}: {resumo_meses(ausentes)}")
+    return "; ".join(partes)
+
+
+def solicitar_carga(faltando: list[str], meses: list[str], carregados: dict) -> None:
     """Pede ao Airflow a carga do que falta, uma vez por pedido, e acompanha o andamento."""
     nomes_faltando = resumo_nomes([nome_cidade(c) for c in faltando])
     periodo = meses[0] if len(meses) == 1 else f"{meses[0]} a {meses[-1]}"
@@ -269,9 +285,11 @@ def solicitar_carga(faltando: list[str], meses: list[str]) -> None:
     if carga and carga["chave"] == chave:  # pedido já feito nesta sessão: não dispara de novo
         fase = carga["fase"]
         if fase == "concluida":
+            # a carga terminou e ainda falta algo: as combinações que a fonte não tem foram puladas
             st.warning(
-                f"A carga terminou, mas ainda não há dados de {descricao}: a fonte pode não ter "
-                "publicado esse período."
+                "A carga terminou, mas a fonte não tem dado (ou a extração falhou) para: "
+                f"{lacunas(faltando, meses, carregados)}. O que foi carregado já está na tela; "
+                "se foi falha, os detalhes estão no Airflow (http://127.0.0.1:8080)."
             )
         elif fase == "falhou":
             st.error(
@@ -321,7 +339,7 @@ meses_pedidos = meses_do_intervalo(periodo_ini, periodo_fim)
 carregados = df.groupby("cidade")["periodo"].agg(set).to_dict()
 faltando = [c for c in cidades_aplicadas if not set(meses_pedidos) <= carregados.get(c, set())]
 if faltando:
-    solicitar_carga(faltando, meses_pedidos)  # mostra o aviso ou o andamento da carga
+    solicitar_carga(faltando, meses_pedidos, carregados)  # mostra o aviso ou o andamento da carga
 
 das_cidades = df[df["cidade"].isin(cidades_aplicadas)]
 if das_cidades.empty:

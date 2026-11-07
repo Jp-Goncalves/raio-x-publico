@@ -19,8 +19,30 @@ def salvar_raw(dados: list, cidade: str, ano: int, mes: int) -> Path:
     return caminho
 
 
-def extrair(cidade: str, ano: int, mes: int, falhar_se_vazio: bool = False) -> Path:
+class SemDadosNaFonte(Exception):
+    """A fonte respondeu, mas sem nenhum registro pra esse cidade/mês.
+
+    Não é uma falha: o mês pode não ter sido publicado, ou a cidade não ter dado nele. O main.py
+    traduz isso no código de saída 99, que o Airflow trata como tarefa PULADA (não falhou, não
+    tenta de novo, e as outras combinações do mesmo pedido seguem).
+    """
+
+
+def extrair(
+    cidade: str,
+    ano: int,
+    mes: int,
+    falhar_se_vazio: bool = False,
+    pular_se_vazio: bool = False,
+) -> Path:
     dados = buscar_despesas(cidade, ano, mes)
+
+    if not dados and pular_se_vazio:
+        # nada é gravado, pelo mesmo motivo do falhar_se_vazio
+        raise SemDadosNaFonte(
+            f"nenhum registro para {cidade}/{ano}/{mes}: a fonte não tem esse período pra essa cidade "
+            f"(ou ainda não o publicou)"
+        )
 
     if not dados and falhar_se_vazio:
         # nada é gravado: um [] não pode sobrescrever (via UPSERT no load) um raw bom
