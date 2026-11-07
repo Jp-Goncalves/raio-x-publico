@@ -282,13 +282,9 @@ def solicitar_carga(faltando: list[int], meses: list[str], carregados: dict) -> 
     descricao = f"{nomes_faltando} ({periodo})"
     chave = (tuple(sorted(faltando)), meses[0], len(meses))
 
-    ultimo_pedivel = mes_de_defasagem(hoje)[1].strftime("%Y-%m")
-    if meses[-1] > ultimo_pedivel:
-        st.warning(
-            f"Sem dados carregados para {descricao}. A fonte publica com atraso, então só peço "
-            f"cargas até {rotulo_mes(ultimo_pedivel)}."
-        )
-        return
+    # sem teto de data: pedir um mês que a fonte ainda não publicou é permitido. A API responde [],
+    # a extração sai com código 99, o Airflow marca a tarefa como pulada e a mensagem de "concluida"
+    # abaixo diz quais combinações ficaram sem dado
     if len(faltando) > LIMITE_CIDADES_POR_PEDIDO:
         st.warning(
             f"{len(faltando)} cidades sem dados no período: o limite é {LIMITE_CIDADES_POR_PEDIDO} "
