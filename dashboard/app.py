@@ -65,6 +65,29 @@ def mes_de_defasagem(hoje: date) -> tuple[date, date]:
     return date(ano, mes, 1), date(ano, mes, monthrange(ano, mes)[1])
 
 
+MESES_PT = [
+    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+]  # fmt: skip
+
+
+def rotulo_mes(periodo: str) -> str:
+    # '2026-08' -> 'Agosto/2026'
+    ano, mes = periodo.split("-")
+    return f"{MESES_PT[int(mes) - 1]}/{ano}"
+
+
+def meses_do_intervalo(inicio: str, fim: str) -> list[str]:
+    # 'AAAA-MM' de inicio a fim, inclusive
+    ano, mes = map(int, inicio.split("-"))
+    ano_fim, mes_fim = map(int, fim.split("-"))
+    meses = []
+    while (ano, mes) <= (ano_fim, mes_fim):
+        meses.append(f"{ano:04d}-{mes:02d}")
+        ano, mes = (ano + 1, 1) if mes == 12 else (ano, mes + 1)
+    return meses
+
+
 def numero_br(valor: float, casas: int = 2) -> str:
     # 1234567.8 -> "1.234.567,80"
     return f"{valor:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -125,10 +148,6 @@ def nome_cidade(slug: str) -> str:
     return nomes.get(slug, slug.title())
 
 
-def rotulo_cidade(slug: str) -> str:
-    return nome_cidade(slug) + (" ✓" if slug in com_dados else "")
-
-
 def resumo_nomes(nomes_: list[str], limite: int = 5) -> str:
     # o "Select all" pode trazer centenas de cidades sem dado: não despeja todos os nomes na tela
     if len(nomes_) <= limite:
@@ -136,21 +155,25 @@ def resumo_nomes(nomes_: list[str], limite: int = 5) -> str:
     return ", ".join(nomes_[:limite]) + f" e mais {len(nomes_) - limite}"
 
 
-# quem tem dado carregado vem primeiro; o resto, em ordem alfabética
-opcoes = sorted(nomes, key=lambda slug: (slug not in com_dados, nomes[slug]))
+# ordem alfabética pelo slug (sem acento): "Águas de Lindóia" fica junto do A, e a ordem não muda
+# quando uma cidade ganha dados, então a lista é sempre a mesma pra quem usa
+opcoes = sorted(nomes)
 hoje = date.today()
 inicio_padrao, fim_padrao = mes_de_defasagem(hoje)
+mes_padrao = inicio_padrao.strftime("%Y-%m")  # início e fim do mês são o mesmo mês
+# os dados da fonte são mensais: o período é escolhido em mês e ano, do mais recente ao mais antigo
+meses_opcoes = meses_do_intervalo(PRIMEIRO_MES_DA_FONTE.strftime("%Y-%m"), hoje.strftime("%Y-%m"))[::-1]
 
 # O valor dos filtros vive no session_state (key=...), e NÃO em default=/value=. No Streamlit o
 # default/value faz parte da identidade do widget: se ele muda entre uma rodada e outra, o servidor
 # já não reconhece o widget que o navegador atualizou e joga a escolha da pessoa fora (foi o que
 # aconteceu quando o default passou a ser "o que foi confirmado": a 2ª confirmação ignorava a data e
-# as cidades novas). Com key, a identidade é estável e o valor sobrevive até quando a ordem das
-# opções muda (cidades que ganham ✓ sobem na lista).
+# as cidades novas). Com key, a identidade é estável.
 if st.session_state.get("f_uf") != uf:  # primeira vez, ou trocou de estado: recomeça do zero
     st.session_state["f_uf"] = uf
     st.session_state["f_cidades"] = []  # abre sem nenhuma cidade: quem usa escolhe
-    st.session_state["f_periodo"] = (inicio_padrao, fim_padrao)
+    st.session_state["f_mes_ini"] = mes_padrao
+    st.session_state["f_mes_fim"] = mes_padrao
 else:
     # só mexe se algo ficou inválido; reatribuir sempre apagaria o que a pessoa digitou e ainda
     # não confirmou
@@ -168,53 +191,40 @@ with st.sidebar.form("filtros"):
         "Cidades",
         opcoes,
         key="f_cidades",
-        format_func=rotulo_cidade,
+        format_func=nome_cidade,
         placeholder="Escolha uma ou mais cidades",
-        help="✓ = município com dados carregados.",
     )
-    intervalo = st.date_input(
-        "Período",
-        key="f_periodo",
-        min_value=PRIMEIRO_MES_DA_FONTE,
-        max_value=hoje,
-        format="DD/MM/YYYY",
+    mes_ini = st.selectbox(
+        "Mês inicial",
+        meses_opcoes,
+        key="f_mes_ini",
+        format_func=rotulo_mes,
         help=(
             f"Abre {MESES_DE_DEFASAGEM} meses antes de hoje, porque a fonte publica com atraso. "
-            "Os dados são mensais: vale cada mês que o intervalo toca."
+            "Os dados da fonte são mensais."
         ),
     )
+    mes_fim = st.selectbox("Mês final", meses_opcoes, key="f_mes_fim", format_func=rotulo_mes)
     if carregando:
         st.caption("⏳ Carga em andamento. Aguarde para confirmar de novo.")
     confirmar = st.form_submit_button("Confirmar", type="primary", width="stretch", disabled=carregando)
 
 # o botão só devolve True no clique; o que foi confirmado fica guardado entre as interações
 if confirmar:
-    if len(intervalo) != 2:  # com o calendário aberto, o usuário já clicou só na data inicial
-        st.sidebar.warning("Escolha também a data final no calendário.")
+    if mes_ini > mes_fim:  # 'AAAA-MM' em texto ordena igual a data
+        st.sidebar.warning("O mês inicial não pode ser depois do mês final.")
     elif not cidades_sel:
         st.sidebar.warning("Escolha ao menos uma cidade.")
     else:
-        st.session_state["aplicado"] = {"uf": uf, "cidades": list(cidades_sel), "intervalo": tuple(intervalo)}
+        st.session_state["aplicado"] = {"uf": uf, "cidades": list(cidades_sel), "periodo": (mes_ini, mes_fim)}
 
 aplicado = st.session_state.get("aplicado")
 if aplicado and aplicado["uf"] != uf:  # trocou de estado: o que estava confirmado era de outro
     st.session_state.pop("aplicado")
     aplicado = None
 if not aplicado:
-    st.info("Escolha as cidades e o período na barra lateral e clique em Confirmar. As cidades com ✓ têm dados carregados.")
+    st.info("Escolha as cidades e o período na barra lateral e clique em Confirmar.")
     st.stop()  # interrompe o script aqui: nada abaixo é desenhado
-
-
-
-def meses_do_intervalo(inicio: str, fim: str) -> list[str]:
-    # 'AAAA-MM' de inicio a fim, inclusive
-    ano, mes = map(int, inicio.split("-"))
-    ano_fim, mes_fim = map(int, fim.split("-"))
-    meses = []
-    while (ano, mes) <= (ano_fim, mes_fim):
-        meses.append(f"{ano:04d}-{mes:02d}")
-        ano, mes = (ano + 1, 1) if mes == 12 else (ano, mes + 1)
-    return meses
 
 
 # o Streamlit refaz o script a cada interação; este fragmento se refaz sozinho a cada 5 s
@@ -245,13 +255,14 @@ def acompanhar_carga(run_id: str, descricao: str) -> None:
 
 
 def resumo_meses(meses_: list[str], limite: int = 4) -> str:
-    if len(meses_) <= limite:
-        return ", ".join(meses_)
-    return ", ".join(meses_[:limite]) + f" e mais {len(meses_) - limite}"
+    rotulos = [rotulo_mes(m) for m in meses_]
+    if len(rotulos) <= limite:
+        return ", ".join(rotulos)
+    return ", ".join(rotulos[:limite]) + f" e mais {len(rotulos) - limite}"
 
 
 def lacunas(faltando: list[str], meses: list[str], carregados: dict) -> str:
-    # quais meses de quais cidades continuam sem dado: "Amparo: 2026-05; Lorena: 2026-05, 2026-06"
+    # quais meses de quais cidades continuam sem dado: "Amparo: Maio/2026; Lorena: Maio/2026, Junho/2026"
     partes = []
     for cidade in faltando:
         ausentes = [m for m in meses if m not in carregados.get(cidade, set())]
@@ -263,7 +274,7 @@ def lacunas(faltando: list[str], meses: list[str], carregados: dict) -> str:
 def solicitar_carga(faltando: list[str], meses: list[str], carregados: dict) -> None:
     """Pede ao Airflow a carga do que falta, uma vez por pedido, e acompanha o andamento."""
     nomes_faltando = resumo_nomes([nome_cidade(c) for c in faltando])
-    periodo = meses[0] if len(meses) == 1 else f"{meses[0]} a {meses[-1]}"
+    periodo = rotulo_mes(meses[0]) if len(meses) == 1 else f"{rotulo_mes(meses[0])} a {rotulo_mes(meses[-1])}"
     descricao = f"{nomes_faltando} ({periodo})"
     chave = (tuple(sorted(faltando)), meses[0], len(meses))
 
@@ -271,7 +282,7 @@ def solicitar_carga(faltando: list[str], meses: list[str], carregados: dict) -> 
     if meses[-1] > ultimo_pedivel:
         st.warning(
             f"Sem dados carregados para {descricao}. A fonte publica com atraso, então só peço "
-            f"cargas até {ultimo_pedivel}."
+            f"cargas até {rotulo_mes(ultimo_pedivel)}."
         )
         return
     if len(faltando) > LIMITE_CIDADES_POR_PEDIDO:
@@ -338,7 +349,7 @@ def solicitar_carga(faltando: list[str], meses: list[str], carregados: dict) -> 
 
 
 cidades_aplicadas = aplicado["cidades"]
-periodo_ini, periodo_fim = (d.strftime("%Y-%m") for d in aplicado["intervalo"])
+periodo_ini, periodo_fim = aplicado["periodo"]
 
 # o que falta carregar: cidade sem algum dos meses pedidos
 meses_pedidos = meses_do_intervalo(periodo_ini, periodo_fim)
