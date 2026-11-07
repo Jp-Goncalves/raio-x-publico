@@ -160,9 +160,6 @@ def resumo_nomes(nomes_: list[str], limite: int = 5) -> str:
 opcoes = sorted(nomes)
 hoje = date.today()
 inicio_padrao, fim_padrao = mes_de_defasagem(hoje)
-mes_padrao = inicio_padrao.strftime("%Y-%m")  # início e fim do mês são o mesmo mês
-# os dados da fonte são mensais: o período é escolhido em mês e ano, do mais recente ao mais antigo
-meses_opcoes = meses_do_intervalo(PRIMEIRO_MES_DA_FONTE.strftime("%Y-%m"), hoje.strftime("%Y-%m"))[::-1]
 
 # O valor dos filtros vive no session_state (key=...), e NÃO em default=/value=. No Streamlit o
 # default/value faz parte da identidade do widget: se ele muda entre uma rodada e outra, o servidor
@@ -172,8 +169,7 @@ meses_opcoes = meses_do_intervalo(PRIMEIRO_MES_DA_FONTE.strftime("%Y-%m"), hoje.
 if st.session_state.get("f_uf") != uf:  # primeira vez, ou trocou de estado: recomeça do zero
     st.session_state["f_uf"] = uf
     st.session_state["f_cidades"] = []  # abre sem nenhuma cidade: quem usa escolhe
-    st.session_state["f_mes_ini"] = mes_padrao
-    st.session_state["f_mes_fim"] = mes_padrao
+    st.session_state["f_periodo"] = (inicio_padrao, fim_padrao)
 else:
     # só mexe se algo ficou inválido; reatribuir sempre apagaria o que a pessoa digitou e ainda
     # não confirmou
@@ -194,29 +190,33 @@ with st.sidebar.form("filtros"):
         format_func=nome_cidade,
         placeholder="Escolha uma ou mais cidades",
     )
-    mes_ini = st.selectbox(
-        "Mês inicial",
-        meses_opcoes,
-        key="f_mes_ini",
-        format_func=rotulo_mes,
+    intervalo = st.date_input(
+        "Período",
+        key="f_periodo",
+        min_value=PRIMEIRO_MES_DA_FONTE,
+        max_value=hoje,
+        format="DD/MM/YYYY",
         help=(
-            f"Abre {MESES_DE_DEFASAGEM} meses antes de hoje, porque a fonte publica com atraso. "
-            "Os dados da fonte são mensais."
+            "Só o mês e o ano contam: o dia é ignorado, porque a fonte publica por mês. Por "
+            f"exemplo, 15/01 a 10/03 vale janeiro, fevereiro e março inteiros. Abre {MESES_DE_DEFASAGEM} "
+            "meses antes de hoje, porque a fonte publica com atraso."
         ),
     )
-    mes_fim = st.selectbox("Mês final", meses_opcoes, key="f_mes_fim", format_func=rotulo_mes)
+    st.caption("O dia não é considerado: vale o mês inteiro.")
     if carregando:
         st.caption("⏳ Carga em andamento. Aguarde para confirmar de novo.")
     confirmar = st.form_submit_button("Confirmar", type="primary", width="stretch", disabled=carregando)
 
 # o botão só devolve True no clique; o que foi confirmado fica guardado entre as interações
 if confirmar:
-    if mes_ini > mes_fim:  # 'AAAA-MM' em texto ordena igual a data
-        st.sidebar.warning("O mês inicial não pode ser depois do mês final.")
+    if len(intervalo) != 2:  # com o calendário aberto, o usuário já clicou só na data inicial
+        st.sidebar.warning("Escolha também a data final no calendário.")
     elif not cidades_sel:
         st.sidebar.warning("Escolha ao menos uma cidade.")
     else:
-        st.session_state["aplicado"] = {"uf": uf, "cidades": list(cidades_sel), "periodo": (mes_ini, mes_fim)}
+        # só mês e ano vão adiante: o dia escolhido é descartado aqui
+        periodo = tuple(d.strftime("%Y-%m") for d in intervalo)
+        st.session_state["aplicado"] = {"uf": uf, "cidades": list(cidades_sel), "periodo": periodo}
 
 aplicado = st.session_state.get("aplicado")
 if aplicado and aplicado["uf"] != uf:  # trocou de estado: o que estava confirmado era de outro
@@ -376,7 +376,11 @@ if filtrado.empty:
     st.warning("Selecione ao menos um órgão.")
     st.stop()
 
-st.caption("Cidades: " + ", ".join(nome_cidade(c) for c in cidades_aplicadas if c in com_dados) + " (valores somados).")
+nome_periodo = rotulo_mes(periodo_ini) if periodo_ini == periodo_fim else f"{rotulo_mes(periodo_ini)} a {rotulo_mes(periodo_fim)}"
+st.caption(
+    "Cidades: " + ", ".join(nome_cidade(c) for c in cidades_aplicadas if c in com_dados)
+    + f" (valores somados). Período: {nome_periodo}, meses inteiros: o dia escolhido não é considerado."
+)
 
 # --- métricas ---
 for coluna, campo in zip(st.columns(3), ROTULOS):
