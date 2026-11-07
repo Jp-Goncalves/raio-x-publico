@@ -11,6 +11,11 @@ COPY .streamlit ./.streamlit
 COPY src ./src
 COPY dashboard ./dashboard
 
+# o app só lê o banco e fala com o Airflow: não precisa de root. Os arquivos continuam
+# pertencendo ao root (e só de leitura pra este usuário), então o app não consegue alterar o próprio código
+RUN useradd --create-home --uid 10001 app
+USER app
+
 EXPOSE 8501
 
 # o endereço de escuta e a conexão com o banco vêm do docker-compose.yml (variáveis de ambiente)
