@@ -1,5 +1,7 @@
--- Mart: uma linha por cidade x mês x órgão, com as três etapas do gasto
--- público lado a lado (empenho -> liquidação -> pagamento).
+-- Mart: uma linha por município x mês x órgão, com as três etapas do gasto
+-- público lado a lado (empenho -> liquidação -> pagamento). O município é
+-- identificado pelo código IBGE (o nome se repete entre estados); o nome vem de
+-- dim_municipio.
 --
 -- Cada etapa vira uma coluna própria porque somar vl_despesa direto, sem
 -- olhar o evento, conta o mesmo gasto várias vezes (empenhado + liquidado +
@@ -9,7 +11,7 @@
 -- mês em que o órgão anula empenhos de meses anteriores).
 
 select
-    cidade,
+    codigo_municipio,
     periodo,
     orgao,
 
@@ -26,4 +28,4 @@ select
     count(*) as qtd_lancamentos
 
 from {{ ref('stg_tce_sp__despesas') }}
-group by cidade, periodo, orgao
+group by codigo_municipio, periodo, orgao

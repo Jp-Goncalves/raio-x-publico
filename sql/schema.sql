@@ -2,18 +2,23 @@
 -- JSONB em vez de colunas por campo porque o formato pode mudar (campo
 -- novo/removido/tipo diferente) sem quebrar a carga - o parsing definitivo
 -- fica pra camada de transform/dbt.
+--
+-- A chave do município é o CÓDIGO IBGE (7 dígitos), não o nome: o nome se repete entre
+-- estados (há vários "Bom Jesus"). O nome que a API do TCE-SP espera (slug, ex.: 'jacarei')
+-- continua existindo, mas só nas bordas (CLI, DAG, nome do arquivo em data/raw) e na
+-- dimensão dim_municipio; o load traduz slug -> código.
 CREATE TABLE IF NOT EXISTS raw_pagamentos (
     id SERIAL PRIMARY KEY,
-    cidade TEXT NOT NULL,
+    codigo_ibge BIGINT NOT NULL,
     periodo TEXT NOT NULL, -- formato AAAA-MM, ex.: '2020-01'
     payload JSONB NOT NULL,
     extracted_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 -- UNIQUE (não só índice) porque o load é um UPSERT: reprocessar o mesmo
--- cidade+periodo (rerun de falha, backfill) precisa substituir, não duplicar.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_pagamentos_cidade_periodo
-    ON raw_pagamentos (cidade, periodo);
+-- município+periodo (rerun de falha, backfill) precisa substituir, não duplicar.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_pagamentos_codigo_periodo
+    ON raw_pagamentos (codigo_ibge, periodo);
 
 -- Tabela raw dos municípios (API de localidades do IBGE): uma linha por UF, com a
 -- lista inteira de municípios da UF em JSONB. Adicionar outro estado é só mais uma
@@ -37,13 +42,13 @@ CREATE TABLE IF NOT EXISTS raw_tce_sp_municipios (
 -- Tabela staging: uma linha por despesa (o raw explode o array em linhas),
 -- já com os tipos corrigidos. Sem UNIQUE por linha porque a API não manda
 -- nenhum id de despesa - a idempotência aqui é por partição inteira
--- (cidade+periodo), não por linha: transform.py apaga e recarrega a
--- partição inteira a cada rodada (partition overwrite), nunca UPSERT linha
--- a linha.
+-- (município+periodo, que é uma linha do raw), não por linha: transform.py
+-- apaga e recarrega a partição inteira a cada rodada (partition overwrite),
+-- nunca UPSERT linha a linha.
 CREATE TABLE IF NOT EXISTS stg_pagamentos (
     id SERIAL PRIMARY KEY,
     raw_pagamentos_id INTEGER NOT NULL REFERENCES raw_pagamentos (id),
-    cidade TEXT NOT NULL,
+    codigo_ibge BIGINT NOT NULL,
     periodo TEXT NOT NULL,
     orgao TEXT NOT NULL,
     evento TEXT NOT NULL,
@@ -56,6 +61,8 @@ CREATE TABLE IF NOT EXISTS stg_pagamentos (
     transformed_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Não-único: acelera o DELETE por partição e as consultas por cidade/período.
-CREATE INDEX IF NOT EXISTS idx_stg_pagamentos_cidade_periodo
-    ON stg_pagamentos (cidade, periodo);
+-- Não-único: acelera o DELETE por partição (uma linha do raw) e as consultas por município.
+CREATE INDEX IF NOT EXISTS idx_stg_pagamentos_raw_id
+    ON stg_pagamentos (raw_pagamentos_id);
+CREATE INDEX IF NOT EXISTS idx_stg_pagamentos_codigo_periodo
+    ON stg_pagamentos (codigo_ibge, periodo);

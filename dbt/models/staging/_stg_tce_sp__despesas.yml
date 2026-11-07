@@ -16,9 +16,16 @@ models:
                 to: source('raiox', 'raw_pagamentos')
                 field: id
 
-      - name: cidade
+      - name: codigo_municipio
+        description: >
+          Código IBGE do município (7 dígitos). Toda despesa aponta pra um município que
+          existe em dim_municipio.
         data_tests:
           - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_municipio')
+                field: codigo_municipio
 
       - name: periodo
         description: Formato AAAA-MM.

@@ -7,7 +7,7 @@ Pipeline de dados que extrai as despesas públicas de municípios paulistas da A
 ## Arquitetura
 
 ```
-API TCE-SP --extract--> data/raw/*.json --load--> raw_pagamentos (JSONB)
+API TCE-SP --extract--> data/raw/*.json --load--> raw_pagamentos (JSONB, chave: código IBGE + período)
                                                        |
                       +--------------------------------+-----------------------------+
                       |                                                              |
@@ -16,6 +16,9 @@ API TCE-SP --extract--> data/raw/*.json --load--> raw_pagamentos (JSONB)
                stg_pagamentos                                       stg_tce_sp__despesas (view)
                                                                                      |
                                                                        fct_despesas_mensais (table)
+                                                                                     |
+IBGE --> raw_ibge_municipios --+                                                     +--> dashboard / DAG
+TCE-SP --> raw_tce_sp_municipios --+--> dbt --> dim_estado, dim_municipio (código IBGE <-> nome da API)
 ```
 
 A fase 1 fez a transformação em Python (`stg_pagamentos`). A fase 2 refez a mesma lógica em SQL com dbt (`stg_tce_sp__despesas`), e as duas versões foram comparadas: mesma contagem de linhas e mesma soma de valores, até o centavo. As duas coexistem de propósito, como referência.
@@ -50,26 +53,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-**3. Pipeline em Python**
-
-Há um único ponto de entrada, `src/main.py`, com subcomandos:
-
-| Comando | O que faz |
-|---|---|
-| `python src/main.py extract <cidade> <ano> <mes>` | Busca na API e salva o JSON bruto em `data/raw/` |
-| `python src/main.py load <cidade> <ano> <mes>` | Carrega o JSON salvo em `raw_pagamentos` |
-| `python src/main.py transform <cidade> <ano> <mes>` | Trata e grava em `stg_pagamentos` |
-| `python src/main.py pipeline <cidade> <ano> <mes>` | Roda extract, load e transform em sequência |
-| `python src/main.py backfill <ano> <cidade> [<cidade> ...]` | Roda o pipeline pros 12 meses de um ano, pra uma ou mais cidades (validadas pela dimensão) |
-| `python src/main.py cidades [<cidade> ...]` | Imprime (JSON) as cidades a processar: as informadas (validadas) ou, sem nenhuma, as que já foram carregadas. Usado pelo DAG |
-| `python src/main.py municipios <UF>` | Carrega os municípios de uma UF (API de localidades do IBGE) em `raw_ibge_municipios` |
-| `python src/main.py municipios-tce-sp` | Carrega a lista de municípios que o TCE-SP atende em `raw_tce_sp_municipios` |
-
-Exemplo: `python src/main.py pipeline jacarei 2020 1`. A cidade é o nome em minúsculas, sem acento, como a API espera.
-
-Os municípios são dado de referência e mudam raramente, então ficam fora do pipeline mensal: rode `municipios SP` uma vez (e de novo se quiser atualizar). A tabela guarda uma linha por UF; outro estado é só mais uma linha. O código IBGE de 7 dígitos é a chave de um município: o nome não serve, porque se repete entre estados. Se o banco já existia antes dessa tabela, aplique só o `CREATE TABLE` dela do `sql/schema.sql`, sem recriar o volume.
-
-**4. dbt**
+**3. dbt: conexão**
 
 O dbt lê a conexão de `~/.dbt/profiles.yml`, que fica fora do repositório (mesma lógica do `.env`). Crie o arquivo com:
 
@@ -88,17 +72,48 @@ raio_x_publico:
       threads: 4
 ```
 
-Depois, dentro da pasta `dbt/`:
+**4. Municípios (obrigatório antes de carregar despesas)**
+
+O raw de despesas é identificado pelo **código IBGE** do município (7 dígitos), e não pelo nome, porque o nome se repete entre estados (há vários "Bom Jesus"). O que você digita nos comandos continua sendo o nome que a API do TCE-SP espera (`jacarei`: minúsculas, sem acento); o `load` o traduz em código pela `dim_municipio`. Por isso a dimensão precisa existir antes do primeiro `load`:
+
+```bash
+python src/main.py municipios SP        # municípios do estado (API de localidades do IBGE)
+python src/main.py municipios-tce-sp    # os que o TCE-SP atende, com o nome que a API espera
+cd dbt && dbt run                       # monta dim_estado e dim_municipio
+```
+
+A `dim_municipio` tem os 645 municípios de SP; a coluna `slug_tce_sp` fica preenchida nos 644 que o TCE-SP atende e vazia na capital, que é auditada pelo TCM-SP. O cruzamento só vale pra SP, pra um nome repetido em outro estado não casar por engano. Os municípios mudam raramente, então ficam fora do pipeline mensal: rode de novo só se quiser atualizar. Tentar carregar despesas antes disso falha com uma mensagem que diz o que rodar.
+
+*Banco que já existia antes dessa mudança?* A chave de `raw_pagamentos` era o nome da cidade. Com a dimensão construída, aplique a migração uma vez (é transacional, faz cópia de segurança da tabela e é seguro repetir) e depois rode `dbt run`:
+
+```bash
+docker exec -i raio-x-publico-db psql -U raiox -d raiox_publico -v ON_ERROR_STOP=1 < sql/migracoes/001_chave_codigo_ibge.sql
+```
+
+**5. Pipeline em Python**
+
+Há um único ponto de entrada, `src/main.py`, com subcomandos:
+
+| Comando | O que faz |
+|---|---|
+| `python src/main.py extract <cidade> <ano> <mes>` | Busca na API e salva o JSON bruto em `data/raw/` |
+| `python src/main.py load <cidade> <ano> <mes>` | Carrega o JSON salvo em `raw_pagamentos` (traduz o nome em código IBGE pela dimensão) |
+| `python src/main.py transform <cidade> <ano> <mes>` | Trata e grava em `stg_pagamentos` |
+| `python src/main.py pipeline <cidade> <ano> <mes>` | Roda extract, load e transform em sequência |
+| `python src/main.py backfill <ano> <cidade> [<cidade> ...]` | Roda o pipeline pros 12 meses de um ano, pra uma ou mais cidades (validadas pela dimensão) |
+| `python src/main.py cidades [<cidade> ...]` | Imprime (JSON) as cidades a processar: as informadas (validadas) ou, sem nenhuma, as que já foram carregadas. Usado pelo DAG |
+| `python src/main.py municipios <UF>` | Carrega os municípios de uma UF (API do IBGE) em `raw_ibge_municipios` |
+| `python src/main.py municipios-tce-sp` | Carrega a lista de municípios que o TCE-SP atende em `raw_tce_sp_municipios` |
+
+Exemplo: `python src/main.py pipeline jacarei 2020 1`. Depois de carregar despesas, reconstrua os modelos e rode os testes de qualidade, dentro da pasta `dbt/`:
 
 ```bash
 dbt debug    # confere projeto e conexão
-dbt run      # constrói a view de staging e a tabela do mart
-dbt test     # roda os 45 testes de qualidade
+dbt run      # constrói staging, mart e dimensões
+dbt test     # roda os 47 testes de qualidade
 ```
 
-Além do mart de despesas, o dbt monta as dimensões de localidade a partir do raw do IBGE (rode `python src/main.py municipios SP` antes): `dim_estado` e `dim_municipio`, com o código IBGE como chave. Pra ligar cada município ao nome que a API de despesas espera, rode também `python src/main.py municipios-tce-sp` (lista de municípios que o TCE-SP atende): a coluna `slug_tce_sp` da `dim_municipio` fica preenchida nos 644 que o TCE-SP atende e vazia nos demais (hoje, só a capital, que é do TCM-SP). O cruzamento só vale para municípios de SP, pra um nome repetido em outro estado não casar por engano.
-
-**5. Airflow (orquestração)**
+**6. Airflow (orquestração)**
 
 O Airflow roda em contêineres, atrás de um *profile* do Compose, então o `docker compose up -d` simples continua subindo só o Postgres do projeto. Gere as duas chaves indicadas no `.env.example`, cole no seu `.env` e suba:
 
@@ -114,9 +129,9 @@ O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `
 - **Manual:** o disparo aceita os parâmetros `cidades` (uma ou mais; vazio = as já carregadas), `mes_inicial` (AAAA-MM) e `quantidade_de_meses`. As cidades escolhidas são validadas contra `dim_municipio`: só vale cidade que o TCE-SP atende, senão a execução falha logo, com a lista das inválidas. Por exemplo, `["jacarei"]`, `2020-03` e `3` processam março a maio de 2020 de uma cidade só. Dá pra testar sem ativar o DAG: `docker compose --profile airflow exec airflow-scheduler airflow dags test despesas_mensais -c '{"cidades":["jacarei"],"mes_inicial":"2020-03","quantidade_de_meses":3}'`.
 - **Histórico:** o *backfill* do Airflow repete o schedule sobre um intervalo de datas (verificado apenas em simulação, com `dry_run`).
 
-**6. Dashboard**
+**7. Dashboard**
 
-O dashboard é um app Streamlit que lê só o mart `fct_despesas_mensais`, então o Postgres precisa estar de pé e o `dbt run` já executado. Os filtros, na barra lateral:
+O dashboard é um app Streamlit que lê o mart `fct_despesas_mensais` e as dimensões `dim_estado` e `dim_municipio` (os municípios são identificados pelo código IBGE, e os nomes vêm da dimensão), então o Postgres precisa estar de pé e o `dbt run` já executado. Os filtros, na barra lateral:
 
 - **Estado:** vem das dimensões (`dim_estado`); por enquanto só SP, que é o único estado com município atendido pela fonte.
 - **Cidades:** seleção múltipla com os municípios do estado atendidos pelo TCE-SP (`dim_municipio`), abre **sem nenhuma cidade marcada**, em ordem alfabética (sem acento), sem distinção entre as que já têm dado e as que não têm. Escolher uma cidade sem dado no período dispara a carga sob demanda (ver abaixo). Os valores das cidades escolhidas são somados.
@@ -155,6 +170,17 @@ streamlit run dashboard/app.py      # rode da raiz do repositório
 
 Neste modo também escuta só em `127.0.0.1` (ver `.streamlit/config.toml`). Não rode os dois ao mesmo tempo: ambos usam a porta 8501.
 
+## Testes
+
+Dois níveis, que testam coisas diferentes:
+
+```bash
+python -m unittest discover -s tests -t . -b    # código Python: 38 testes, sem banco nem rede
+cd dbt && dbt test                               # dados: 47 testes, no Postgres
+```
+
+Os de Python cobrem as conversões de valor e data, o retry (5xx e corpo inválido tentam de novo, 4xx falha na hora), a regra de "mês sem dado" (pular na carga sob demanda, falhar na agendada), a validação de cidades, e o cliente do Airflow (pedido com identificador fixo, e o que fazer quando o Airflow recusa um id repetido). Não precisam de nenhuma dependência além das do `requirements.txt`.
+
 ## Estrutura
 
 ```
@@ -170,6 +196,8 @@ src/
   backfill.py    carga histórica de um ano inteiro, pras cidades informadas
   db.py          conexão com o Postgres
 sql/schema.sql   tabelas raw_pagamentos, raw_ibge_municipios, raw_tce_sp_municipios e stg_pagamentos
+sql/migracoes/   migrações pra bancos que já existiam (001: chave do raw_pagamentos passa a ser o código IBGE)
+tests/           testes unitários do código Python (unittest, sem banco nem rede)
 dbt/
   models/staging/   stg_tce_sp__despesas, stg_ibge__municipios e stg_tce_sp__municipios (views) + sources + testes
   models/marts/     fct_despesas_mensais, dim_estado e dim_municipio (tables) + testes
@@ -179,8 +207,8 @@ airflow/
   dags/             DAG despesas_mensais
   dbt_profiles/     profile do dbt usado dentro do contêiner (lê variáveis de ambiente)
 dashboard/
-  app.py            app Streamlit (lê o mart fct_despesas_mensais)
-  Dockerfile        imagem do dashboard (serviço `dashboard` do Compose)
+  app.py            app Streamlit (lê o mart fct_despesas_mensais e as dimensões de localidade)
+  Dockerfile        imagem do dashboard (serviço `dashboard` do Compose); roda como usuário comum, não como root
   requirements.txt  dependências do dashboard, separadas das do pipeline
 .streamlit/         configuração do Streamlit (sem telemetria, só localhost)
 .dockerignore       o que não entra no contexto de build das imagens
@@ -191,10 +219,12 @@ data/raw/        JSONs brutos (ignorados pelo git)
 ## Decisões de projeto
 
 - **Raw como JSONB.** A tabela raw guarda o payload exatamente como veio. Campo novo, removido ou com tipo diferente na API não quebra a carga; o problema aparece na camada de transformação, onde os testes do dbt o pegam com mensagem clara.
-- **Idempotência.** O load é um UPSERT sobre `UNIQUE (cidade, periodo)`. O transform apaga e reinsere a partição inteira (cidade + período) na mesma transação, porque a API não manda id por despesa. Rodar duas vezes o mesmo período não duplica nada.
+- **Idempotência.** O load é um UPSERT sobre `UNIQUE (codigo_ibge, periodo)`. O transform apaga e reinsere a partição inteira (município + período, que é uma linha do raw) na mesma transação, porque a API não manda id por despesa. Rodar duas vezes o mesmo período não duplica nada.
 - **Retry só onde faz sentido.** Erro 5xx, falha de rede e resposta 200 com corpo que não é JSON são tentados de novo, com espera crescente. Erro 4xx falha na hora, e uma extração que falhou nunca grava arquivo.
 - **Um único `main`.** Os módulos só definem funções; só o `main.py` é executável.
-- **dbt.** Staging materializa como view, marts como table. Os testes cobrem `not_null`, `accepted_values` (fornecedor e evento), `relationships` e dois testes singulares (grão do mart e reconciliação com o staging).
+- **O município é identificado pelo código IBGE.** O nome se repete entre estados ("Bom Jesus"), então a chave do raw, do staging e do mart é o código de 7 dígitos. O nome que a API do TCE-SP espera (`slug`) fica só nas bordas (linha de comando, parâmetros do DAG, nome do arquivo em `data/raw`) e na `dim_municipio`, que faz a tradução. Quando entrar o primeiro estado novo, o raw e os modelos já estão prontos pra isso; falta só uma fonte de despesas pra ele.
+- **dbt.** Staging materializa como view, marts como table. Os testes cobrem `not_null`, `accepted_values` (fornecedor e evento), `relationships` (inclusive despesa → município), e testes singulares: grão do mart, reconciliação com o staging **por município e período** (uma soma geral não pegaria valores trocados entre cidades), código IBGE × UF e slug único por UF.
+- **Dois níveis de teste.** O dbt testa os **dados**; o `tests/` testa o **código Python** (conversões, retry, regras de "mês sem dado", validação de cidades, cliente do Airflow).
 
 ## Particularidades dos dados
 
@@ -215,3 +245,8 @@ Projeto de estudo, parte de um roadmap de engenharia de dados (Python, PostgreSQ
 - [x] Fase 2: dbt com staging, mart e testes de qualidade
 - [x] Fase 3: orquestração com Airflow (DAG mensal `despesas_mensais`; execução agendada e backfill real ainda não exercitados, só simulados)
 - [x] Dashboard em Streamlit (filtros, gráficos e tabela; roda em contêiner pelo Compose)
+- [x] Catálogo de municípios (IBGE) e chave do raw pelo código IBGE
+- [x] Carga sob demanda pelo dashboard (via API do Airflow)
+- [ ] Outros estados: o raw e os modelos já estão prontos, mas cada estado precisa de uma fonte de despesas própria (cada tribunal de contas tem uma API diferente, e nenhuma foi verificada)
+- [ ] Execução agendada real e backfill do Airflow: só simulados até hoje
+- [ ] Seletor de só mês e ano no dashboard (hoje é um calendário de datas em que o dia é ignorado)

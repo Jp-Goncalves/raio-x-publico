@@ -2,15 +2,17 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from db import conectar
+from municipios import codigo_ibge_da_cidade
 
 
-def ler_raw(cidade: str, ano: int, mes: int) -> tuple[int, list]:
+def ler_raw(cidade: str, ano: int, mes: int) -> tuple[int, int, list]:
     periodo = f"{ano:04d}-{mes:02d}"
+    codigo_ibge = codigo_ibge_da_cidade(cidade)
     with conectar() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, payload FROM raw_pagamentos WHERE cidade = %s AND periodo = %s;",
-                (cidade, periodo),
+                "SELECT id, payload FROM raw_pagamentos WHERE codigo_ibge = %s AND periodo = %s;",
+                (codigo_ibge, periodo),
             )
             row = cur.fetchone()
 
@@ -18,7 +20,7 @@ def ler_raw(cidade: str, ano: int, mes: int) -> tuple[int, list]:
         raise ValueError(f"nenhum raw encontrado para {cidade}/{periodo} - rode o load primeiro")
 
     raw_id, payload = row
-    return raw_id, payload
+    return raw_id, codigo_ibge, payload
 
 
 def converter_valor(valor: str) -> Decimal:
@@ -62,11 +64,11 @@ def transformar(dados: list) -> tuple[list, list]:
     return transformados, erros
 
 
-def gravar_stg(raw_id: int, cidade: str, periodo: str, transformados: list) -> None:
+def gravar_stg(raw_id: int, codigo_ibge: int, periodo: str, transformados: list) -> None:
     linhas = [
         (
             raw_id,
-            cidade,
+            codigo_ibge,
             periodo,
             r["orgao"],
             r["evento"],
@@ -85,14 +87,12 @@ def gravar_stg(raw_id: int, cidade: str, periodo: str, transformados: list) -> N
     # é trocada, ou nada muda.
     with conectar() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM stg_pagamentos WHERE cidade = %s AND periodo = %s;",
-                (cidade, periodo),
-            )
+            # a partição (município + período) é exatamente uma linha do raw
+            cur.execute("DELETE FROM stg_pagamentos WHERE raw_pagamentos_id = %s;", (raw_id,))
             cur.executemany(
                 """
                 INSERT INTO stg_pagamentos (
-                    raw_pagamentos_id, cidade, periodo, orgao, evento, nr_empenho,
+                    raw_pagamentos_id, codigo_ibge, periodo, orgao, evento, nr_empenho,
                     vl_despesa, dt_emissao_despesa, tipo_identificacao_fornecedor,
                     numero_documento_fornecedor, nm_fornecedor
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
@@ -100,12 +100,12 @@ def gravar_stg(raw_id: int, cidade: str, periodo: str, transformados: list) -> N
                 linhas,
             )
 
-    print(f"{len(linhas)} linhas gravadas em stg_pagamentos para {cidade}/{periodo}")
+    print(f"{len(linhas)} linhas gravadas em stg_pagamentos para o município {codigo_ibge}/{periodo}")
 
 
 def transformar_e_gravar(cidade: str, ano: int, mes: int) -> None:
     periodo = f"{ano:04d}-{mes:02d}"
-    raw_id, dados = ler_raw(cidade, ano, mes)
+    raw_id, codigo_ibge, dados = ler_raw(cidade, ano, mes)
     transformados, erros = transformar(dados)
 
     print(f"{len(dados)} registros lidos")
@@ -118,4 +118,4 @@ def transformar_e_gravar(cidade: str, ano: int, mes: int) -> None:
             print(f"  linha {i}: {msg} -> {registro}")
         raise ValueError(f"{len(erros)} registro(s) falharam na conversão - partição não gravada")
 
-    gravar_stg(raw_id, cidade, periodo, transformados)
+    gravar_stg(raw_id, codigo_ibge, periodo, transformados)

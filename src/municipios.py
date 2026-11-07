@@ -1,3 +1,4 @@
+import psycopg
 from psycopg.types.json import Jsonb
 
 from api_client import get_json
@@ -65,14 +66,41 @@ def carregar_municipios_tce_sp() -> int:
     return len(dados)
 
 
+def codigo_ibge_da_cidade(cidade: str) -> int:
+    """Traduz o nome que a API do TCE-SP espera (slug, ex.: 'jacarei') no código IBGE.
+
+    O raw é identificado pelo código, não pelo nome (o nome se repete entre estados), mas CLI,
+    DAG e nome de arquivo continuam usando o slug. A tradução vem da dim_municipio.
+    """
+    try:
+        with conectar() as conn:
+            linha = conn.execute(
+                "SELECT codigo_municipio FROM dim_municipio WHERE slug_tce_sp = %s", (cidade,)
+            ).fetchone()
+    except psycopg.errors.UndefinedTable as e:
+        raise ValueError(
+            "a dim_municipio ainda não existe: rode `python src/main.py municipios SP`, "
+            "`python src/main.py municipios-tce-sp` e `dbt run` antes de carregar despesas"
+        ) from e
+    if linha is None:
+        raise ValueError(
+            f"'{cidade}' não é uma cidade que o TCE-SP atende (ou a dim_municipio está desatualizada). "
+            "Confira o nome (minúsculas, sem acento)."
+        )
+    return linha[0]
+
+
 def cidades_carregadas() -> list[str]:
-    # cidades que já passaram pelo load COM dados: é o que o DAG atualiza quando ninguém escolhe
-    # cidade. Payload vazio fica de fora: a capital (TCM-SP) está no raw só com [] de um teste
-    # antigo, e incluí-la faria a extração falhar todo mês pela trava de "vazio".
+    # cidades que já passaram pelo load COM dados (devolvidas pelo nome que a API espera): é o que
+    # o DAG atualiza quando ninguém escolhe cidade. Payload vazio fica de fora: a capital (TCM-SP)
+    # está no raw só com [] de um teste antigo, e incluí-la faria a extração falhar todo mês pela
+    # trava de "vazio". O slug vem da dimensão; sem slug (cidade que o TCE-SP não atende) não entra.
     with conectar() as conn:
         linhas = conn.execute(
-            "SELECT DISTINCT cidade FROM raw_pagamentos "
-            "WHERE jsonb_array_length(payload) > 0 ORDER BY cidade"
+            "SELECT DISTINCT m.slug_tce_sp FROM raw_pagamentos r "
+            "JOIN dim_municipio m ON m.codigo_municipio = r.codigo_ibge "
+            "WHERE jsonb_array_length(r.payload) > 0 AND m.slug_tce_sp IS NOT NULL "
+            "ORDER BY 1"
         ).fetchall()
     return [linha[0] for linha in linhas]
 

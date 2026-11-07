@@ -7,7 +7,7 @@ sources:
       - name: raw_pagamentos
         description: >
           JSON bruto da API de transparência do TCE-SP, um payload (array
-          inteiro) por cidade+período. Carregado pelo load.py, fora do dbt.
+          inteiro) por município (código IBGE) + período. Carregado pelo load.py, fora do dbt.
 
       - name: raw_ibge_municipios
         description: >

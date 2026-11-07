@@ -33,8 +33,8 @@ st.set_page_config(page_title="Raio-X Público", layout="wide")
 def carregar_mart() -> pd.DataFrame:
     with conectar() as conn:
         cur = conn.execute(
-            "select cidade, periodo, orgao, empenhado_liquido, liquidado, pago, qtd_lancamentos "
-            "from fct_despesas_mensais order by cidade, periodo, orgao"
+            "select codigo_municipio, periodo, orgao, empenhado_liquido, liquidado, pago, qtd_lancamentos "
+            "from fct_despesas_mensais order by codigo_municipio, periodo, orgao"
         )
         colunas = [c.name for c in cur.description]
         linhas = cur.fetchall()
@@ -49,7 +49,7 @@ def carregar_localidades() -> pd.DataFrame:
     # terão despesa nessa fonte, então não faz sentido oferecê-los
     with conectar() as conn:
         cur = conn.execute(
-            "select e.uf, e.nome_uf, m.nome_municipio, m.slug_tce_sp "
+            "select e.uf, e.nome_uf, m.codigo_municipio, m.nome_municipio, m.slug_tce_sp "
             "from dim_municipio m join dim_estado e using (uf) "
             "where m.slug_tce_sp is not null order by e.uf, m.nome_municipio"
         )
@@ -140,12 +140,16 @@ if localidades.empty:
 estados = localidades.drop_duplicates("uf").set_index("uf")["nome_uf"]
 uf = st.sidebar.selectbox("Estado", list(estados.index), format_func=lambda u: f"{estados[u]} ({u})")
 do_estado = localidades[localidades["uf"] == uf]
-nomes = dict(zip(do_estado["slug_tce_sp"], do_estado["nome_municipio"]))  # slug -> nome de exibição
-com_dados = set(df["cidade"])
+# Os municípios são identificados pelo código IBGE (o nome se repete entre estados). O slug (nome que
+# a API do TCE-SP espera) só é usado ao pedir uma carga ao Airflow.
+codigos = [int(c) for c in do_estado["codigo_municipio"]]
+nomes = dict(zip(codigos, do_estado["nome_municipio"], strict=True))  # código -> nome de exibição
+slugs = dict(zip(codigos, do_estado["slug_tce_sp"], strict=True))  # código -> nome na API
+com_dados = {int(c) for c in df["codigo_municipio"]}
 
 
-def nome_cidade(slug: str) -> str:
-    return nomes.get(slug, slug.title())
+def nome_cidade(codigo: int) -> str:
+    return nomes.get(codigo, f"Município {codigo}")
 
 
 def resumo_nomes(nomes_: list[str], limite: int = 5) -> str:
@@ -157,7 +161,7 @@ def resumo_nomes(nomes_: list[str], limite: int = 5) -> str:
 
 # ordem alfabética pelo slug (sem acento): "Águas de Lindóia" fica junto do A, e a ordem não muda
 # quando uma cidade ganha dados, então a lista é sempre a mesma pra quem usa
-opcoes = sorted(nomes)
+opcoes = sorted(nomes, key=lambda codigo: slugs[codigo])
 hoje = date.today()
 inicio_padrao, fim_padrao = mes_de_defasagem(hoje)
 
@@ -261,17 +265,17 @@ def resumo_meses(meses_: list[str], limite: int = 4) -> str:
     return ", ".join(rotulos[:limite]) + f" e mais {len(rotulos) - limite}"
 
 
-def lacunas(faltando: list[str], meses: list[str], carregados: dict) -> str:
+def lacunas(faltando: list[int], meses: list[str], carregados: dict) -> str:
     # quais meses de quais cidades continuam sem dado: "Amparo: Maio/2026; Lorena: Maio/2026, Junho/2026"
     partes = []
-    for cidade in faltando:
-        ausentes = [m for m in meses if m not in carregados.get(cidade, set())]
+    for codigo in faltando:
+        ausentes = [m for m in meses if m not in carregados.get(codigo, set())]
         if ausentes:
-            partes.append(f"{nome_cidade(cidade)}: {resumo_meses(ausentes)}")
+            partes.append(f"{nome_cidade(codigo)}: {resumo_meses(ausentes)}")
     return "; ".join(partes)
 
 
-def solicitar_carga(faltando: list[str], meses: list[str], carregados: dict) -> None:
+def solicitar_carga(faltando: list[int], meses: list[str], carregados: dict) -> None:
     """Pede ao Airflow a carga do que falta, uma vez por pedido, e acompanha o andamento."""
     nomes_faltando = resumo_nomes([nome_cidade(c) for c in faltando])
     periodo = rotulo_mes(meses[0]) if len(meses) == 1 else f"{rotulo_mes(meses[0])} a {rotulo_mes(meses[-1])}"
@@ -337,7 +341,8 @@ def solicitar_carga(faltando: list[str], meses: list[str], carregados: dict) -> 
                 "Airflow (http://127.0.0.1:8080)."
             )
             return
-        run_id = disparar_carga(faltando, meses[0], len(meses))
+        # o Airflow e a API entendem o nome (slug), não o código IBGE
+        run_id = disparar_carga([slugs[c] for c in faltando], meses[0], len(meses))
     except AirflowIndisponivel as e:
         st.error(
             f"Sem dados carregados para {descricao}, e não consegui pedir a carga: {e}. O Airflow "
@@ -353,12 +358,12 @@ periodo_ini, periodo_fim = aplicado["periodo"]
 
 # o que falta carregar: cidade sem algum dos meses pedidos
 meses_pedidos = meses_do_intervalo(periodo_ini, periodo_fim)
-carregados = df.groupby("cidade")["periodo"].agg(set).to_dict()
+carregados = {int(c): meses for c, meses in df.groupby("codigo_municipio")["periodo"].agg(set).items()}
 faltando = [c for c in cidades_aplicadas if not set(meses_pedidos) <= carregados.get(c, set())]
 if faltando:
     solicitar_carga(faltando, meses_pedidos, carregados)  # mostra o aviso ou o andamento da carga
 
-das_cidades = df[df["cidade"].isin(cidades_aplicadas)]
+das_cidades = df[df["codigo_municipio"].isin(cidades_aplicadas)]
 if das_cidades.empty:
     st.stop()  # nada pra mostrar ainda; o aviso ou o andamento da carga já está na tela
 
@@ -383,7 +388,7 @@ st.caption(
 )
 
 # --- métricas ---
-for coluna, campo in zip(st.columns(3), ROTULOS):
+for coluna, campo in zip(st.columns(3), ROTULOS, strict=True):
     total = filtrado[campo].sum()
     coluna.metric(ROTULOS[campo], brl_compacto(total), help=f"Valor exato: {brl(total)}")
 
@@ -404,7 +409,7 @@ else:
 st.subheader("Pago por órgão")
 st.caption("Total pago no período escolhido. A cor indica a cidade.")
 por_orgao = (
-    filtrado.assign(cidade=filtrado["cidade"].map(nome_cidade))
+    filtrado.assign(cidade=filtrado["codigo_municipio"].map(nome_cidade))
     .groupby(["orgao", "cidade"], as_index=False)["pago"]
     .sum()
 )
@@ -412,7 +417,8 @@ st.bar_chart(por_orgao, x="orgao", y="pago", color="cidade", horizontal=True)
 
 # --- tabela: o Styler formata só a exibição; os números continuam ordenáveis ---
 st.subheader("Detalhe")
-tabela = filtrado.assign(cidade=filtrado["cidade"].map(nome_cidade)).rename(
+tabela = filtrado.assign(cidade=filtrado["codigo_municipio"].map(nome_cidade)).drop(columns="codigo_municipio")
+tabela = tabela[["cidade", *[c for c in tabela.columns if c != "cidade"]]].rename(
     columns={
         **ROTULOS,
         "qtd_lancamentos": "Lançamentos",

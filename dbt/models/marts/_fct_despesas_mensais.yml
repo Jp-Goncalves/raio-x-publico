@@ -3,13 +3,18 @@ version: 2
 models:
   - name: fct_despesas_mensais
     description: >
-      Despesas públicas por cidade, mês e órgão, com as três etapas do gasto
+      Despesas públicas por município, mês e órgão, com as três etapas do gasto
       em colunas separadas (empenho líquido, liquidado, pago). Nunca some as
       três colunas entre si: são etapas do mesmo gasto, não gastos distintos.
     columns:
-      - name: cidade
+      - name: codigo_municipio
+        description: Código IBGE do município (7 dígitos). O nome está em dim_municipio.
         data_tests:
           - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_municipio')
+                field: codigo_municipio
 
       - name: periodo
         description: Formato AAAA-MM.

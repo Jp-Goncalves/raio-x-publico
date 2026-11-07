@@ -6,7 +6,7 @@ with despesas as (
 
     select
         r.id as raw_pagamentos_id,
-        r.cidade,
+        r.codigo_ibge as codigo_municipio,
         r.periodo,
         d.value ->> 'orgao'               as orgao,
         d.value ->> 'evento'              as evento,
@@ -34,7 +34,7 @@ fornecedor_partes as (
 
 select
     raw_pagamentos_id,
-    cidade,
+    codigo_municipio,
     periodo,
     orgao,
     evento,
