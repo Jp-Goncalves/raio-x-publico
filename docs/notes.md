@@ -89,3 +89,60 @@ categorias vêm sem CPF/CNPJ explícito. O formato varia entre 2 e 3 partes
 (`"CNPJ - PESSOA JURÍDICA - 65069593000198"` contra `"PESSOA FÍSICA - 921998"`), então
 o tipo é sempre a primeira parte e o documento a última. Os 4 valores são validados por
 um teste `accepted_values` do dbt.
+
+## Mês sem dado: a API responde `200` com `[]`, nunca erro
+
+Para mês não publicado, cidade fora da jurisdição ou ano sem dado (testado com 1900 e
+2100), a resposta é `200` com `[]`. Não há como provocar um erro real da API por parâmetro.
+Por isso "a fonte não tem esse mês" e "a fonte caiu" são casos diferentes no pipeline: o
+primeiro vira tarefa pulada (execução manual/sob demanda) ou falha com nova tentativa
+(execução agendada); o segundo é um erro HTTP ou de rede, com retry.
+
+## Defasagem de publicação
+
+Medido em 06/11/2026, em Jacareí e Campinas: julho, agosto e setembro de 2026 tinham dado;
+outubro e novembro vinham vazios. Só dois pontos de medida: não se sabe em que dia do mês os
+dados costumam sair. O DAG usa três meses de defasagem (`MESES_DE_DEFASAGEM`) por margem.
+
+## Início da série: janeiro de 2014
+
+Em Jacareí, os 12 meses de 2013 vêm vazios e 2014-01 tem dado (4.849 registros). Em outras
+10 cidades (Campinas, São José dos Campos, Santos, Ribeirão Preto, Taubaté, Lorena, Amparo,
+Aguaí, Barra do Turvo e Américo de Campos), dezembro de 2013 vem vazio e janeiro de 2014 tem
+dado. Não há documentação confirmando 2014 como início, e uma cidade pode ter começado depois:
+nesse caso os meses dela só voltam vazios.
+
+## Campo `dt_emissao_despesa`: data do lançamento, nem sempre no mês consultado
+
+É a data do **próprio lançamento** (empenho, liquidação, pagamento), não a do empenho
+original: comparando o mesmo empenho, 92% dos pagamentos e 68% das liquidações têm data
+posterior à do empenho. Medido em Jacareí, Campinas e as demais cidades carregadas
+(267.075 linhas no momento da medição):
+
+| evento | dentro do mês consultado | em mês anterior |
+|---|---|---|
+| Empenhado, Reforço, Anulação | 100% | 0% |
+| Valor Pago | 99,1% | 0,8% |
+| Valor Liquidado | 87,9% | 12,1% |
+
+- Parte das liquidações aparece no relatório de um mês com data de meses antes (até 11 meses
+  ou mais). Há também 24 linhas com data no mês **seguinte** ao consultado (esquisitice da
+  fonte).
+- Consequência: o total "por data de emissão" de um mês **não é igual** ao total "por mês do
+  relatório" (que é o que o mart `fct_despesas_mensais` e a API usam). Para um filtro por dia
+  ficar correto, seria preciso carregar também os meses seguintes, porque lançamentos datados
+  de um mês podem vir no relatório dos meses seguintes. Sem isso, o último mês carregado
+  ficaria incompleto sem aviso.
+- Decisão: o dashboard fica no critério mensal (mês do relatório); o dia escolhido no
+  calendário é ignorado. Um filtro por dia seria uma visão à parte, "por data de emissão",
+  com um mart diário (4.439 linhas contra 218 do mensal, com os dados de hoje) e um teste que
+  confira que a soma dos dias agrupada pelo mês do relatório bate com o mensal.
+
+## Endpoint de municípios
+
+`https://transparencia.tce.sp.gov.br/api/json/municipios` devolve `{"municipio": "jacarei",
+"municipio_extenso": "Jacareí"}` para 644 municípios, os mesmos 645 do IBGE menos a capital
+(TCM-SP). O `slug` (`municipio`) é o nome do IBGE sem acento, em minúsculas, com hífen no
+lugar de espaço e apóstrofo: a regra reproduzida em SQL em `dim_municipio.slug_nome` bate
+com os 644 slugs. Nomes se repetem entre estados (há vários "Bom Jesus"), então a chave de
+um município é o código IBGE, e o slug só vale dentro de SP.
