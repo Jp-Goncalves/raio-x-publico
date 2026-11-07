@@ -141,16 +141,22 @@ opcoes = sorted(nomes, key=lambda slug: (slug not in com_dados, nomes[slug]))
 hoje = date.today()
 inicio_padrao, fim_padrao = mes_de_defasagem(hoje)
 
-# O que já foi confirmado volta como valor inicial dos filtros. Sem isso, quando a carga termina
-# os municípios novos ganham ✓ e sobem pro topo da lista; com as opções em outra ordem, o
-# Streamlit trata o filtro como um widget novo e o zera, e a pessoa perderia as cidades escolhidas.
-anterior = st.session_state.get("aplicado")
-if anterior and anterior["uf"] == uf:
-    cidades_iniciais = [c for c in anterior["cidades"] if c in nomes]
-    periodo_inicial = anterior["intervalo"]
+# O valor dos filtros vive no session_state (key=...), e NÃO em default=/value=. No Streamlit o
+# default/value faz parte da identidade do widget: se ele muda entre uma rodada e outra, o servidor
+# já não reconhece o widget que o navegador atualizou e joga a escolha da pessoa fora (foi o que
+# aconteceu quando o default passou a ser "o que foi confirmado": a 2ª confirmação ignorava a data e
+# as cidades novas). Com key, a identidade é estável e o valor sobrevive até quando a ordem das
+# opções muda (cidades que ganham ✓ sobem na lista).
+if st.session_state.get("f_uf") != uf:  # primeira vez, ou trocou de estado: recomeça do zero
+    st.session_state["f_uf"] = uf
+    st.session_state["f_cidades"] = []  # abre sem nenhuma cidade: quem usa escolhe
+    st.session_state["f_periodo"] = (inicio_padrao, fim_padrao)
 else:
-    cidades_iniciais = []  # primeira vez: abre sem nenhuma cidade, quem usa escolhe
-    periodo_inicial = (inicio_padrao, fim_padrao)
+    # só mexe se algo ficou inválido; reatribuir sempre apagaria o que a pessoa digitou e ainda
+    # não confirmou
+    validas = [c for c in st.session_state["f_cidades"] if c in nomes]
+    if validas != st.session_state["f_cidades"]:
+        st.session_state["f_cidades"] = validas
 
 # com uma carga em andamento, o botão fica travado: sem isso, cada clique a mais seria um pedido
 carga_atual = st.session_state.get("carga")
@@ -161,14 +167,14 @@ with st.sidebar.form("filtros"):
     cidades_sel = st.multiselect(
         "Cidades",
         opcoes,
-        default=cidades_iniciais,
+        key="f_cidades",
         format_func=rotulo_cidade,
         placeholder="Escolha uma ou mais cidades",
         help="✓ = município com dados carregados.",
     )
     intervalo = st.date_input(
         "Período",
-        value=periodo_inicial,
+        key="f_periodo",
         min_value=PRIMEIRO_MES_DA_FONTE,
         max_value=hoje,
         format="DD/MM/YYYY",
