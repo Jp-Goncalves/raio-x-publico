@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS stg_pagamentos (
     nr_empenho TEXT NOT NULL,
     vl_despesa NUMERIC(14, 2) NOT NULL,
     dt_emissao_despesa DATE NOT NULL,
-    tipo_identificacao_fornecedor TEXT NOT NULL, -- ex.: CNPJ, PESSOA FÍSICA, IDENTIFICAÇÃO ESPECIAL, INSCRIÇÃO GENÉRICA-OUTROS - nem sempre é um "documento" de fato
+    tipo_identificacao_fornecedor TEXT NOT NULL, -- ex.: CNPJ, PESSOA FÍSICA, IDENTIFICAÇÃO ESPECIAL, INSCRIÇÃO GENÉRICA-OUTROS, INTERNACIONAL - nem sempre é um "documento" de fato
     numero_documento_fornecedor TEXT NOT NULL,
     nm_fornecedor TEXT NOT NULL,
     transformed_at TIMESTAMP NOT NULL DEFAULT NOW()

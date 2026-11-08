@@ -80,15 +80,20 @@ empenho. Medido em Jacareí + Campinas, 2020 inteiro:
   meses anteriores) e o pago pode superar o liquidado (pagamento de liquidações
   antigas). Ambos são dado legítimo.
 
-## Campo `id_fornecedor`: 4 categorias
+## Campo `id_fornecedor`: 5 categorias
 
 Depois do split por `" - "`, a primeira parte (`tipo_identificacao_fornecedor`) tem
-4 valores: `CNPJ`, `PESSOA FÍSICA`, `IDENTIFICAÇÃO ESPECIAL` e
-`INSCRIÇÃO GENÉRICA-OUTROS`. Só `CNPJ` é de fato um tipo de documento; as outras
-categorias vêm sem CPF/CNPJ explícito. O formato varia entre 2 e 3 partes
-(`"CNPJ - PESSOA JURÍDICA - 65069593000198"` contra `"PESSOA FÍSICA - 921998"`), então
-o tipo é sempre a primeira parte e o documento a última. Os 4 valores são validados por
-um teste `accepted_values` do dbt.
+5 valores: `CNPJ`, `PESSOA FÍSICA`, `IDENTIFICAÇÃO ESPECIAL`, `INSCRIÇÃO GENÉRICA-OUTROS` e
+`INTERNACIONAL` (fornecedor estrangeiro, ex.: `"INTERNACIONAL - 1208204887"`). Só `CNPJ` é de
+fato um tipo de documento; as outras categorias vêm sem CPF/CNPJ explícito. O formato varia entre
+2 e 3 partes (`"CNPJ - PESSOA JURÍDICA - 65069593000198"` contra `"PESSOA FÍSICA - 921998"`), então
+o tipo é sempre a primeira parte e o documento a última. Os 5 valores são validados por um teste
+`accepted_values` do dbt.
+
+`INTERNACIONAL` só apareceu quando São José dos Campos foi carregada (27 linhas), e não nas 11
+cidades testadas antes. Foi o teste que avisou: uma carga sob demanda terminou com o `dbt test`
+em falha, até a lista ser ampliada. Vale pra qualquer cidade nova: a lista é a que vimos até
+agora, não a que a API pode ter.
 
 ## Mês sem dado: a API responde `200` com `[]`, nunca erro
 
