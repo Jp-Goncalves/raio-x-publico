@@ -12,7 +12,9 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
-    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-airflow_jwt_secret}
+    # sem valor padrão de propósito: um padrão público seria uma chave que todo mundo conhece.
+    # O airflow-init se recusa a subir se estiver vazia
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-}
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     # desenvolvimento: enxerga DAGs novos em 30s (o padrão é 300s)
     AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "30"
@@ -46,7 +48,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # só a própria máquina alcança o banco. Sem o 127.0.0.1, o Docker publica em todas as
+      # interfaces e qualquer um da mesma rede chega ao Postgres
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
@@ -81,13 +85,22 @@ services:
     command:
       - -c
       - |
+        # segredos obrigatórios e fortes: melhor parar aqui do que subir com um valor que todo
+        # mundo conhece (a senha "airflow" é a primeira que qualquer um tenta)
+        if [ -z "$${AIRFLOW__CORE__FERNET_KEY}" ] || [ -z "$${AIRFLOW__API_AUTH__JWT_SECRET}" ] \
+           || [ -z "$${_AIRFLOW_WWW_USER_PASSWORD}" ] || [ "$${_AIRFLOW_WWW_USER_PASSWORD}" = "airflow" ]; then
+          echo "ERRO: preencha AIRFLOW_FERNET_KEY, AIRFLOW_JWT_SECRET e AIRFLOW_ADMIN_PASSWORD" >&2
+          echo "no .env (a senha não pode ser 'airflow'). Os comandos pra gerar estão no .env.example." >&2
+          exit 1
+        fi
         mkdir -p /opt/airflow/logs /opt/airflow/dags
         /entrypoint airflow version
-        # usuário restrito (papel Op: dispara execuções, não administra) que o dashboard usa
-        # pra pedir cargas sob demanda. "|| true": se já existir, o comando reclama e segue
+        # usuário restrito (papel User: dispara execuções, mas não mexe em conexões, variáveis
+        # nem pools, que o papel Op permitiria) que o dashboard usa pra pedir cargas sob demanda.
+        # "|| true": se já existir, o comando reclama e segue
         if [ -n "$${DASHBOARD_AIRFLOW_PASSWORD}" ]; then
           airflow users create --username "$${DASHBOARD_AIRFLOW_USER}" --firstname Dashboard \
-            --lastname Raiox --role Op --email dashboard@example.com \
+            --lastname Raiox --role User --email dashboard@example.com \
             --password "$${DASHBOARD_AIRFLOW_PASSWORD}" || true
         fi
         chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/logs /opt/airflow/dags || true
@@ -96,7 +109,7 @@ services:
       _AIRFLOW_DB_MIGRATE: "true"
       _AIRFLOW_WWW_USER_CREATE: "true"
       _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-}
       DASHBOARD_AIRFLOW_USER: ${DASHBOARD_AIRFLOW_USER:-dashboard}
       DASHBOARD_AIRFLOW_PASSWORD: ${DASHBOARD_AIRFLOW_PASSWORD:-}
     user: "0:0"
@@ -189,6 +202,15 @@ services:
       DASHBOARD_AIRFLOW_PASSWORD: ${DASHBOARD_AIRFLOW_PASSWORD:-}
     ports:
       - "127.0.0.1:8501:8501"
+    # contêiner enxuto: sem privilégios extras, sem capacidades do Linux, e o sistema de arquivos
+    # só de leitura (o /tmp é um disco em memória). O app só lê o banco e fala com o Airflow
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
       interval: 30s

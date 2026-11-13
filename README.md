@@ -1,51 +1,56 @@
 # Raio-X Público
 
-Pipeline de dados que extrai as despesas públicas de municípios paulistas da API de transparência do TCE-SP, guarda o dado bruto no PostgreSQL, trata e modela com dbt, pronto pra alimentar um dashboard.
+**English** | [Português](README.pt-BR.md)
 
-É um pipeline **ELT em batch**: o dado entra bruto (E, L) e só depois é transformado (T), dentro do banco. Projeto de estudo de engenharia de dados, montado como uma versão pequena do que o mercado chama de *Modern Data Stack* (extração em Python, warehouse, transformação com dbt, orquestração com Airflow).
+*Raio-X Público* means "public X-ray". It is a data pipeline that extracts public spending data for municipalities in the state of São Paulo (Brazil) from the TCE-SP transparency API, stores the raw data in PostgreSQL, cleans and models it with dbt, and serves it through a dashboard.
 
-## Arquitetura
+It is a **batch ELT pipeline**: data lands raw first (extract, load) and is transformed afterwards, inside the database. It is a learning project in data engineering, built as a small version of what the industry calls the *Modern Data Stack*: extraction in Python, a warehouse, transformation with dbt, orchestration with Airflow.
+
+> Code comments, dbt model descriptions and [docs/notes.md](docs/notes.md) are written in Portuguese. A full Portuguese version of this README is in [README.pt-BR.md](README.pt-BR.md).
+
+## Architecture
 
 ```
-API TCE-SP --extract--> data/raw/*.json --load--> raw_pagamentos (JSONB, chave: código IBGE + período)
+TCE-SP API --extract--> data/raw/*.json --load--> raw_pagamentos (JSONB, key: IBGE code + period)
                                                        |
                       +--------------------------------+-----------------------------+
                       |                                                              |
-           transform.py (Python, fase 1)                              dbt (SQL dentro do Postgres, fase 2)
+           transform.py (Python, phase 1)                              dbt (SQL inside Postgres, phase 2)
                       |                                                              |
                stg_pagamentos                                       stg_tce_sp__despesas (view)
                                                                                      |
                                                                        fct_despesas_mensais (table)
                                                                                      |
 IBGE --> raw_ibge_municipios --+                                                     +--> dashboard / DAG
-TCE-SP --> raw_tce_sp_municipios --+--> dbt --> dim_estado, dim_municipio (código IBGE <-> nome da API)
+TCE-SP --> raw_tce_sp_municipios --+--> dbt --> dim_estado, dim_municipio (IBGE code <-> API name)
 ```
 
-A fase 1 fez a transformação em Python (`stg_pagamentos`). A fase 2 refez a mesma lógica em SQL com dbt (`stg_tce_sp__despesas`), e as duas versões foram comparadas: mesma contagem de linhas e mesma soma de valores, até o centavo. As duas coexistem de propósito, como referência.
+Phase 1 did the transformation in Python (`stg_pagamentos`). Phase 2 redid the same logic in SQL with dbt (`stg_tce_sp__despesas`), and the two versions were compared: same row count and same sum of values, to the cent. Both are kept on purpose, as a reference.
 
 ## Stack
 
-- Python 3.14 (testado em 3.14.7)
+- Python 3.14 (tested on 3.14.7)
 - PostgreSQL 16, via Docker Compose
-- psycopg 3 para acesso ao banco
+- psycopg 3 for database access
 - dbt-core 1.12 + dbt-postgres 1.11
-- Apache Airflow 3.4 (em Docker)
+- Apache Airflow 3.4 (in Docker)
 - Streamlit 1.67 (dashboard)
 
-## Como rodar
+## How to run
 
-Pré-requisitos: Docker e Python 3.14.
+Prerequisites: Docker and Python 3.14.
 
-**1. Configuração e banco**
+**1. Configuration and database**
 
 ```bash
 cp .env.example .env
+# edit .env and fill in POSTGRES_PASSWORD (the command to generate a strong password is in the file itself)
 docker compose up -d
 ```
 
-O `schema.sql` é aplicado automaticamente na primeira subida, com o volume vazio. Se mudar o schema depois, recrie o volume (`docker compose down -v`) ou aplique o SQL na mão. As credenciais do `.env.example` são só de desenvolvimento local. Se a porta 5432 estiver ocupada, troque `POSTGRES_PORT` no `.env`.
+The password is mandatory and there is no default: with an empty `POSTGRES_PASSWORD`, Postgres will not even start. The database listens on `127.0.0.1` only (your own machine), not on the network. `schema.sql` is applied automatically on the first start, when the volume is empty. If you change the schema later, recreate the volume (`docker compose down -v`) or apply the SQL by hand. If port 5432 is taken, change `POSTGRES_PORT` in `.env`. More on security in [SECURITY.md](SECURITY.md).
 
-**2. Dependências**
+**2. Dependencies**
 
 ```bash
 python -m venv .venv
@@ -53,9 +58,9 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-**3. dbt: conexão**
+**3. dbt: connection**
 
-O dbt lê a conexão de `~/.dbt/profiles.yml`, que fica fora do repositório (mesma lógica do `.env`). Crie o arquivo com:
+dbt reads its connection from `~/.dbt/profiles.yml`, which lives outside the repository (same idea as `.env`). Create the file with the content below, replacing the password with the same `POSTGRES_PASSWORD` you put in `.env`:
 
 ```yaml
 raio_x_publico:
@@ -66,187 +71,196 @@ raio_x_publico:
       host: localhost
       port: 5432
       user: raiox
-      password: raiox
+      password: PASTE_THE_POSTGRES_PASSWORD_FROM_ENV_HERE
       dbname: raiox_publico
       schema: public
       threads: 4
 ```
 
-**4. Municípios (obrigatório antes de carregar despesas)**
+**4. Municipalities (required before loading expenses)**
 
-O raw de despesas é identificado pelo **código IBGE** do município (7 dígitos), e não pelo nome, porque o nome se repete entre estados (há vários "Bom Jesus"). O que você digita nos comandos continua sendo o nome que a API do TCE-SP espera (`jacarei`: minúsculas, sem acento); o `load` o traduz em código pela `dim_municipio`. Por isso a dimensão precisa existir antes do primeiro `load`:
+The raw expenses table is keyed by the municipality's **IBGE code** (7 digits), not by its name, because names repeat across states (there are many "Bom Jesus"). What you type in the commands is still the name the TCE-SP API expects (`jacarei`: lowercase, no accents); `load` translates it into the code through `dim_municipio`. That is why the dimension must exist before the first `load`:
 
 ```bash
-python src/main.py municipios SP        # municípios do estado (API de localidades do IBGE)
-python src/main.py municipios-tce-sp    # os que o TCE-SP atende, com o nome que a API espera
-cd dbt && dbt run                       # monta dim_estado e dim_municipio
+python src/main.py municipios SP        # the state's municipalities (IBGE localities API)
+python src/main.py municipios-tce-sp    # the ones TCE-SP covers, with the name the API expects
+cd dbt && dbt run                       # builds dim_estado and dim_municipio
 ```
 
-A `dim_municipio` tem os 645 municípios de SP; a coluna `slug_tce_sp` fica preenchida nos 644 que o TCE-SP atende e vazia na capital, que é auditada pelo TCM-SP. O cruzamento só vale pra SP, pra um nome repetido em outro estado não casar por engano. Os municípios mudam raramente, então ficam fora do pipeline mensal: rode de novo só se quiser atualizar. Tentar carregar despesas antes disso falha com uma mensagem que diz o que rodar.
+`dim_municipio` has all 645 municipalities of SP; the `slug_tce_sp` column is filled for the 644 that TCE-SP covers and empty for the state capital, which is audited by TCM-SP instead. The match is only valid for SP, so a repeated name in another state cannot match by mistake. Municipalities rarely change, so they stay out of the monthly pipeline: run these again only to refresh them. Trying to load expenses before this fails with a message telling you what to run.
 
-*Banco que já existia antes dessa mudança?* A chave de `raw_pagamentos` era o nome da cidade. Com a dimensão construída, aplique a migração uma vez (é transacional, faz cópia de segurança da tabela e é seguro repetir) e depois rode `dbt run`:
+*Already had a database from before this change?* The key of `raw_pagamentos` used to be the city name. Once the dimension is built, apply the migration once (it is transactional, backs the table up, and is safe to repeat), then run `dbt run`:
 
 ```bash
 docker exec -i raio-x-publico-db psql -U raiox -d raiox_publico -v ON_ERROR_STOP=1 < sql/migracoes/001_chave_codigo_ibge.sql
 ```
 
-**5. Pipeline em Python**
+**5. Python pipeline**
 
-Há um único ponto de entrada, `src/main.py`, com subcomandos:
+There is a single entry point, `src/main.py`, with subcommands:
 
-| Comando | O que faz |
+| Command | What it does |
 |---|---|
-| `python src/main.py extract <cidade> <ano> <mes>` | Busca na API e salva o JSON bruto em `data/raw/` |
-| `python src/main.py load <cidade> <ano> <mes>` | Carrega o JSON salvo em `raw_pagamentos` (traduz o nome em código IBGE pela dimensão) |
-| `python src/main.py transform <cidade> <ano> <mes>` | Trata e grava em `stg_pagamentos` |
-| `python src/main.py pipeline <cidade> <ano> <mes>` | Roda extract, load e transform em sequência |
-| `python src/main.py backfill <ano> <cidade> [<cidade> ...]` | Roda o pipeline pros 12 meses de um ano, pra uma ou mais cidades (validadas pela dimensão) |
-| `python src/main.py cidades [<cidade> ...]` | Imprime (JSON) as cidades a processar: as informadas (validadas) ou, sem nenhuma, as que já foram carregadas. Usado pelo DAG |
-| `python src/main.py municipios <UF>` | Carrega os municípios de uma UF (API do IBGE) em `raw_ibge_municipios` |
-| `python src/main.py municipios-tce-sp` | Carrega a lista de municípios que o TCE-SP atende em `raw_tce_sp_municipios` |
+| `python src/main.py extract <city> <year> <month>` | Fetches from the API and saves the raw JSON in `data/raw/` |
+| `python src/main.py load <city> <year> <month>` | Loads the saved JSON into `raw_pagamentos` (translates the name into the IBGE code through the dimension) |
+| `python src/main.py transform <city> <year> <month>` | Cleans the data and writes it to `stg_pagamentos` |
+| `python src/main.py pipeline <city> <year> <month>` | Runs extract, load and transform in sequence |
+| `python src/main.py backfill <year> <city> [<city> ...]` | Runs the pipeline for the 12 months of a year, for one or more cities (validated against the dimension) |
+| `python src/main.py cidades [<city> ...]` | Prints (JSON) the cities to process: the ones given (validated) or, with none, the ones already loaded. Used by the DAG |
+| `python src/main.py municipios <UF>` | Loads a state's municipalities (IBGE API) into `raw_ibge_municipios` |
+| `python src/main.py municipios-tce-sp` | Loads the list of municipalities TCE-SP covers into `raw_tce_sp_municipios` |
 
-Exemplo: `python src/main.py pipeline jacarei 2020 1`. Depois de carregar despesas, reconstrua os modelos e rode os testes de qualidade, dentro da pasta `dbt/`:
+Example: `python src/main.py pipeline jacarei 2020 1`. After loading expenses, rebuild the models and run the quality tests, inside the `dbt/` folder:
 
 ```bash
-dbt debug    # confere projeto e conexão
-dbt run      # constrói staging, mart e dimensões
-dbt test     # roda os 47 testes de qualidade
+dbt debug    # checks the project and the connection
+dbt run      # builds staging, mart and dimensions
+dbt test     # runs the 47 data quality tests
 ```
 
-**6. Airflow (orquestração)**
+**6. Airflow (orchestration)**
 
-O Airflow roda em contêineres, atrás de um *profile* do Compose, então o `docker compose up -d` simples continua subindo só o Postgres do projeto. Gere as duas chaves indicadas no `.env.example`, cole no seu `.env` e suba:
+Airflow runs in containers behind a Compose *profile*, so a plain `docker compose up -d` still starts only the project's Postgres. Generate the two keys and the admin password described in `.env.example` (`AIRFLOW_FERNET_KEY`, `AIRFLOW_JWT_SECRET`, `AIRFLOW_ADMIN_PASSWORD`), paste them into your `.env`, and start it:
 
 ```bash
 docker compose --profile airflow up -d --wait
 ```
 
-A interface fica em http://127.0.0.1:8080, com usuário e senha definidos por `AIRFLOW_ADMIN_USER` e `AIRFLOW_ADMIN_PASSWORD` (`airflow`/`airflow` por padrão, só pra desenvolvimento local; a porta escuta apenas em `127.0.0.1`). A primeira subida constrói a imagem: a oficial do Airflow 3.4.0 mais um venv com o `requirements.txt`, cerca de 3,7 GB em disco. Dentro dos contêineres o banco do projeto é `postgres:5432`.
+The UI is at http://127.0.0.1:8080, with the user and password set by `AIRFLOW_ADMIN_USER` and `AIRFLOW_ADMIN_PASSWORD` (the password is mandatory and has no default: `airflow-init` refuses to start if it, `AIRFLOW_FERNET_KEY` or `AIRFLOW_JWT_SECRET` is empty, or if the password is `airflow`; the port listens on `127.0.0.1` only). The first start builds the image: the official Airflow 3.4.0 image plus a venv with `requirements.txt`, about 3.7 GB on disk. Inside the containers, the project's database is `postgres:5432`.
 
-O DAG `despesas_mensais` (extract e load por cidade e mês, depois `dbt run` e `dbt test`) nasce **pausado**. Um disparo manual num DAG pausado fica na fila sem executar, então ative-o na interface antes de usar (a carga sob demanda do dashboard também precisa dele ativo). Ao ativar, o Airflow às vezes cria na hora uma execução pro último mês agendado que ficou pra trás (na primeira ativação aconteceu, numa ativação posterior não): ela processa o mês de três meses antes da data dessa execução e, se o TCE-SP ainda não publicou esse mês, a extração falha sem gravar nada e tenta de novo no dia seguinte, até 3 vezes.
+The `despesas_mensais` DAG (extract and load per city and month, then `dbt run` and `dbt test`) is created **paused**. A manual trigger on a paused DAG sits in the queue without running, so enable it in the UI before using it (the dashboard's on-demand load also needs it enabled). When you enable it, Airflow sometimes immediately creates a run for the last scheduled month that was left behind (it happened on the first activation, not on a later one): that run processes the month three months before its date and, if TCE-SP has not published that month yet, the extraction fails without writing anything and retries the next day, up to 3 times.
 
-- **Agendado:** todo dia 1º, às 06:00 (São Paulo), processa o mês de **três meses antes** da execução (constante `MESES_DE_DEFASAGEM` no DAG) das cidades que **já foram carregadas** (com dado de verdade: não há lista fixa no DAG). Não é o mês anterior porque o TCE-SP publica com atraso: em 06/11/2026 as duas cidades tinham setembro, mas outubro e novembro vinham vazios.
-- **Manual:** o disparo aceita os parâmetros `cidades` (uma ou mais; vazio = as já carregadas), `mes_inicial` (AAAA-MM) e `quantidade_de_meses`. As cidades escolhidas são validadas contra `dim_municipio`: só vale cidade que o TCE-SP atende, senão a execução falha logo, com a lista das inválidas. Por exemplo, `["jacarei"]`, `2020-03` e `3` processam março a maio de 2020 de uma cidade só. Dá pra testar sem ativar o DAG: `docker compose --profile airflow exec airflow-scheduler airflow dags test despesas_mensais -c '{"cidades":["jacarei"],"mes_inicial":"2020-03","quantidade_de_meses":3}'`.
-- **Histórico:** o *backfill* do Airflow repete o schedule sobre um intervalo de datas (verificado apenas em simulação, com `dry_run`).
+- **Scheduled:** on the 1st of every month at 06:00 (São Paulo time), it processes the month **three months before** the run (the `MESES_DE_DEFASAGEM` constant in the DAG) for the cities that **have already been loaded** (with real data: there is no fixed list in the DAG). It is not the previous month because TCE-SP publishes with a delay: on 2026-11-06 both cities had September, but October and November came back empty.
+- **Manual:** the trigger accepts the parameters `cidades` (one or more; empty = the ones already loaded), `mes_inicial` (YYYY-MM) and `quantidade_de_meses`. The chosen cities are validated against `dim_municipio`: only a city TCE-SP covers is accepted, otherwise the run fails right away, listing the invalid ones. For example, `["jacarei"]`, `2020-03` and `3` process March to May 2020 for a single city. You can test without enabling the DAG: `docker compose --profile airflow exec airflow-scheduler airflow dags test despesas_mensais -c '{"cidades":["jacarei"],"mes_inicial":"2020-03","quantidade_de_meses":3}'`.
+- **History:** Airflow's *backfill* repeats the schedule over a date range (only verified in simulation, with `dry_run`).
 
 **7. Dashboard**
 
-O dashboard é um app Streamlit que lê o mart `fct_despesas_mensais` e as dimensões `dim_estado` e `dim_municipio` (os municípios são identificados pelo código IBGE, e os nomes vêm da dimensão), então o Postgres precisa estar de pé e o `dbt run` já executado. Os filtros, na barra lateral:
+The dashboard is a Streamlit app that reads the `fct_despesas_mensais` mart and the `dim_estado` and `dim_municipio` dimensions (municipalities are identified by IBGE code, and the names come from the dimension), so Postgres must be up and `dbt run` already executed. The filters, in the sidebar:
 
-- **Estado:** vem das dimensões (`dim_estado`); por enquanto só SP, que é o único estado com município atendido pela fonte.
-- **Cidades:** seleção múltipla com os municípios do estado atendidos pelo TCE-SP (`dim_municipio`), abre **sem nenhuma cidade marcada**, em ordem alfabética (sem acento), sem distinção entre as que já têm dado e as que não têm. Escolher uma cidade sem dado no período dispara a carga sob demanda (ver abaixo). Os valores das cidades escolhidas são somados.
-- **Período:** calendário de datas, que abre **três meses antes de hoje** (a fonte publica com atraso, então o mês atual estaria vazio) e vai de janeiro de 2014 até hoje. **O dia não é considerado**: a fonte é mensal, então só o mês e o ano contam (15/01 a 10/03 vale janeiro, fevereiro e março inteiros). Isso está dito no formulário, na ajuda do campo e na legenda do resultado ("Período: Janeiro/2020 a Março/2020, meses inteiros"). O Streamlit não tem seletor de só mês e ano; ficou o calendário de datas por enquanto. Janeiro de 2014 é o primeiro mês que a fonte tem em todas as 11 cidades testadas (Jacareí tem todo 2013 vazio); uma cidade que comece depois só terá os meses dela pulados, e a tela diz quais.
-- **Confirmar:** cidades e período ficam num formulário: mexer neles não muda a tela, só o botão **Confirmar** aplica. O estado fica fora do formulário (as cidades dependem dele) e o filtro de órgãos vem depois, já sobre o que foi confirmado.
+- **State:** comes from the dimensions (`dim_estado`); for now only SP, the only state with municipalities covered by the source.
+- **Cities:** multi-select with the state's municipalities covered by TCE-SP (`dim_municipio`). It opens with **no city selected**, in alphabetical order (accents ignored), with no distinction between cities that already have data and cities that do not. Choosing a city with no data for the period triggers the on-demand load (see below). The values of the chosen cities are added up.
+- **Period:** a date picker that opens **three months before today** (the source publishes with a delay, so the current month would be empty) and goes from January 2014 to today. **The day is not taken into account**: the source is monthly, so only month and year count (15/01 to 10/03 means January, February and March in full). This is stated in the form, in the field's help text and in the result caption ("Período: Janeiro/2020 a Março/2020, meses inteiros"). Streamlit has no month-and-year-only picker, so a date picker it is for now. January 2014 is the first month the source has for all 11 cities tested (Jacareí has all of 2013 empty); a city that starts later just has its own months skipped, and the screen says which.
+- **Confirm:** cities and period live inside a form: changing them does not change the screen, only the **Confirmar** button applies them. The state is outside the form (the cities depend on it) and the agency filter comes after, already working on what was confirmed.
 
-**Carga sob demanda.** Ao confirmar uma cidade e um período sem dado carregado, o dashboard **não grava no banco**: pede ao Airflow, pela API, uma execução do DAG `despesas_mensais` só pra essa cidade e esses meses. A tela mostra o andamento ("na fila", "em andamento"), consulta o Airflow a cada 5 segundos e se atualiza sozinha quando a carga termina. Enquanto a carga está em andamento, o botão **Confirmar fica desabilitado** (pra ninguém disparar pedidos repetidos), e as cidades e o período escolhidos **permanecem** nos filtros depois do resultado. O que isso exige e como se comporta:
+**On-demand load.** When you confirm a city and a period with no loaded data, the dashboard **does not write to the database**: it asks Airflow, through its API, for a run of the `despesas_mensais` DAG for just that city and those months. The screen shows progress ("queued", "running"), polls Airflow every 5 seconds and refreshes by itself when the load finishes. While a load is running, the **Confirmar button is disabled** (so nobody fires repeated requests), and the chosen cities and period **stay** in the filters after the result. What this requires and how it behaves:
 
-- O **Airflow precisa estar no ar** (`--profile airflow`) e o DAG **ativo** (não pausado); senão a tela avisa o que fazer, em vez de enfileirar um pedido que nunca roda.
-- O dashboard usa um **usuário restrito do Airflow** (`DASHBOARD_AIRFLOW_USER`, papel `Op`: dispara execuções, não administra), e não o administrador. O `airflow-init` cria o usuário quando `DASHBOARD_AIRFLOW_PASSWORD` está preenchida no `.env`.
-- **Limites por pedido**: até 5 cidades e 12 meses; acima disso a tela explica e não dispara nada. Não há teto de data: pedir um mês que a fonte ainda não publicou é permitido, a API responde `[]`, a tarefa fica pulada (código 99) e a tela diz quais cidades e meses ficaram sem dado. Sem os limites, o "Select all" (644 cidades) dispararia milhares de chamadas à API pública.
-- **Sem pedidos duplicados**: o pedido tem um identificador determinístico (cidades, mês inicial e quantidade), e o Airflow recusa repetido. Dois cliques, ou duas pessoas pedindo o mesmo, acompanham a mesma execução. Se ela falhou, o botão **Tentar de novo** cria uma nova. Quem não quiser esperar usa **Parar de acompanhar**: a carga continua no Airflow, o botão Confirmar destrava, e **Acompanhar de novo** retoma o acompanhamento.
-- Uma cidade carregada uma vez **passa a entrar na atualização mensal** do DAG (que atualiza as cidades já carregadas), sem limite de quantas.
-- **Mês que a fonte não tem pra aquela cidade** não é erro: numa execução sob demanda (ou manual) essa combinação é **pulada na hora**, sem esperar e sem derrubar o pedido. As outras combinações seguem, o `dbt run` roda com o que deu certo, e a tela diz exatamente quais meses de quais cidades ficaram sem dado. (Na execução **agendada** continua falhando e tentando de novo no dia seguinte, porque lá o mês costuma só estar atrasado.)
-- Se uma etapa **falhar de verdade**, o `dbt run` ainda roda com o que carregou, e a execução termina como falha (a tarefa `conferir` falha de propósito), em vez de parecer sucesso. Um erro real de API pode levar dias pra aparecer como falha por causa das tentativas; o botão **Parar de acompanhar** serve pra isso.
-- **Órgãos.**
+- **Airflow must be up** (`--profile airflow`) and the DAG **enabled** (not paused); otherwise the screen says what to do, instead of queuing a request that never runs.
+- The dashboard uses a **restricted Airflow user** (`DASHBOARD_AIRFLOW_USER`, role `User`: it triggers runs, but cannot read or change connections and variables, which the `Op` role would allow), and not the administrator. `airflow-init` creates the user when `DASHBOARD_AIRFLOW_PASSWORD` is set in `.env`.
+- **Limits per request**: up to 5 cities and 12 months; above that the screen explains and triggers nothing. There is no date ceiling: asking for a month the source has not published yet is allowed, the API answers `[]`, the task is skipped (exit code 99) and the screen says which cities and months had no data. Without the limits, "Select all" (644 cities) would fire thousands of calls at the public API.
+- **No duplicate requests**: a request has a deterministic identifier (cities, first month and count), and Airflow rejects a repeated one. Two clicks, or two people asking for the same thing, follow the same run. If it failed, the **Tentar de novo** button creates a new one. Anyone who does not want to wait uses **Parar de acompanhar**: the load keeps going in Airflow, the Confirmar button unlocks, and **Acompanhar de novo** resumes following it.
+- A city loaded once **joins the monthly update** of the DAG (which updates the cities already loaded), with no limit on how many.
+- **A month the source does not have for that city** is not an error: in an on-demand (or manual) run that combination is **skipped immediately**, without waiting and without bringing the request down. The other combinations go on, `dbt run` runs with what worked, and the screen says exactly which months of which cities had no data. (In the **scheduled** run it keeps failing and retrying the next day, because there the month is usually just late.)
+- If a step **really fails**, `dbt run` still runs with what was loaded, and the run ends as a failure (the `conferir` task fails on purpose) instead of looking like a success. A real API error can take days to show up as a failure because of the retries; the **Parar de acompanhar** button exists for that.
 
-A tela tem três métricas, um gráfico de evolução mensal (uma linha por etapa do gasto, ou barras lado a lado quando só um mês está selecionado), um gráfico do pago por órgão (a cor indica a cidade) e a tabela de detalhe. Pra carregar mais uma cidade, rode o pipeline ou o DAG pra ela. O dashboard precisa das dimensões prontas: rode `municipios SP`, `municipios-tce-sp` e `dbt run` antes. Os valores de empenhado, liquidado e pago aparecem separados porque são etapas do mesmo gasto e não podem ser somados entre si.
+The screen has three metrics, a monthly evolution chart (one line per stage of the spending, or side-by-side bars when only one month is selected), a chart of the amount paid per agency (the color shows the city) and the detail table. To load one more city, run the pipeline or the DAG for it. The dashboard needs the dimensions ready: run `municipios SP`, `municipios-tce-sp` and `dbt run` first. The committed (*empenhado*), settled (*liquidado*) and paid (*pago*) amounts are shown separately because they are stages of the same expense and must not be added to each other.
 
-**Em contêiner (mais simples):**
+**In a container (simpler):**
 
 ```bash
 docker compose --profile dashboard up -d --build
 ```
 
-Abre em http://localhost:8501. A porta é publicada só em `127.0.0.1`. O primeiro build baixa a imagem base e instala as dependências (a imagem final tem cerca de 850 MB).
+It opens at http://localhost:8501. The port is published on `127.0.0.1` only. The first build downloads the base image and installs the dependencies (the final image is about 850 MB). The container runs as a regular user, with no Linux capabilities, no new privileges and a read-only filesystem.
 
-**Direto na máquina**, com venv próprio, separado do do pipeline (útil pra mexer no código com recarga automática):
+**Directly on your machine**, with its own venv, separate from the pipeline's (useful for editing the code with auto-reload):
 
 ```bash
 python -m venv dashboard/.venv
 dashboard\.venv\Scripts\activate    # Linux/macOS: source dashboard/.venv/bin/activate
 pip install -r dashboard/requirements.txt
-streamlit run dashboard/app.py      # rode da raiz do repositório
+streamlit run dashboard/app.py      # run from the repository root
 ```
 
-Neste modo também escuta só em `127.0.0.1` (ver `.streamlit/config.toml`). Não rode os dois ao mesmo tempo: ambos usam a porta 8501.
+In this mode it also listens on `127.0.0.1` only (see `.streamlit/config.toml`). Do not run both at once: they use the same port, 8501.
 
-## Testes
+## Tests
 
-Dois níveis, que testam coisas diferentes:
+Two levels, which test different things:
 
 ```bash
-python -m unittest discover -s tests -t . -b    # código Python: 38 testes, sem banco nem rede
-cd dbt && dbt test                               # dados: 47 testes, no Postgres
+python -m unittest discover -s tests -t . -b    # Python code: 49 tests, no database or network
+cd dbt && dbt test                               # data: 47 tests, in Postgres
 ```
 
-Os de Python cobrem as conversões de valor e data, o retry (5xx e corpo inválido tentam de novo, 4xx falha na hora), a regra de "mês sem dado" (pular na carga sob demanda, falhar na agendada), a validação de cidades, e o cliente do Airflow (pedido com identificador fixo, e o que fazer quando o Airflow recusa um id repetido). Não precisam de nenhuma dependência além das do `requirements.txt`.
+The Python tests cover value and date conversions, retry (5xx and invalid bodies are retried, 4xx fails immediately), the "month without data" rule (skip in the on-demand load, fail in the scheduled one), city validation, the rejection of malicious input (a slug like `../../x` never reaches the API or writes a file), and the Airflow client (a request with a fixed identifier, and what to do when Airflow rejects a repeated id). They need no dependency beyond those in `requirements.txt`.
 
-## Estrutura
+## Structure
 
 ```
 src/
-  main.py        único ponto de entrada (subcomandos)
+  main.py        single entry point (subcommands)
   pipeline.py    rodar_pipeline: extract -> load -> transform
-  api_client.py  GET com retry e backoff, compartilhado pelas duas APIs
-  airflow_client.py  API do Airflow: o dashboard pede cargas sob demanda por aqui
-  extract.py     chama a API de despesas e salva o JSON bruto
-  municipios.py  carrega os municípios do IBGE e a lista do TCE-SP nas tabelas raw
-  load.py        UPSERT do JSON bruto em raw_pagamentos
-  transform.py   conversão de tipos e gravação em stg_pagamentos
-  backfill.py    carga histórica de um ano inteiro, pras cidades informadas
-  db.py          conexão com o Postgres
-sql/schema.sql   tabelas raw_pagamentos, raw_ibge_municipios, raw_tce_sp_municipios e stg_pagamentos
-sql/migracoes/   migrações pra bancos que já existiam (001: chave do raw_pagamentos passa a ser o código IBGE)
-tests/           testes unitários do código Python (unittest, sem banco nem rede)
+  api_client.py  GET with retry and backoff, shared by both APIs
+  airflow_client.py  Airflow API: the dashboard requests on-demand loads through it
+  extract.py     calls the expenses API and saves the raw JSON
+  municipios.py  loads the IBGE municipalities and the TCE-SP list into the raw tables
+  load.py        UPSERT of the raw JSON into raw_pagamentos
+  transform.py   type conversion and writing to stg_pagamentos
+  backfill.py    historical load of a whole year, for the cities given
+  db.py          Postgres connection
+  validacao.py   validates what becomes a URL or a file name (city, year, month, state)
+sql/schema.sql   tables raw_pagamentos, raw_ibge_municipios, raw_tce_sp_municipios and stg_pagamentos
+sql/migracoes/   migrations for databases that already existed (001: raw_pagamentos key becomes the IBGE code)
+tests/           unit tests for the Python code (unittest, no database or network)
 dbt/
-  models/staging/   stg_tce_sp__despesas, stg_ibge__municipios e stg_tce_sp__municipios (views) + sources + testes
-  models/marts/     fct_despesas_mensais, dim_estado e dim_municipio (tables) + testes
-  tests/            testes singulares (grão único, reconciliações com o staging e o raw, código IBGE x UF, slug único por UF)
+  models/staging/   stg_tce_sp__despesas, stg_ibge__municipios and stg_tce_sp__municipios (views) + sources + tests
+  models/marts/     fct_despesas_mensais, dim_estado and dim_municipio (tables) + tests
+  tests/            singular tests (unique grain, reconciliations with staging and raw, IBGE code x state, unique slug per state)
 airflow/
-  Dockerfile        imagem do Airflow + venv isolado com o requirements.txt
-  dags/             DAG despesas_mensais
-  dbt_profiles/     profile do dbt usado dentro do contêiner (lê variáveis de ambiente)
+  Dockerfile        Airflow image + isolated venv with requirements.txt
+  dags/             the despesas_mensais DAG
+  dbt_profiles/     dbt profile used inside the container (reads environment variables)
 dashboard/
-  app.py            app Streamlit (lê o mart fct_despesas_mensais e as dimensões de localidade)
-  Dockerfile        imagem do dashboard (serviço `dashboard` do Compose); roda como usuário comum, não como root
-  requirements.txt  dependências do dashboard, separadas das do pipeline
-.streamlit/         configuração do Streamlit (sem telemetria, só localhost)
-.dockerignore       o que não entra no contexto de build das imagens
-docs/notes.md    comportamento da API e particularidades dos dados
-data/raw/        JSONs brutos (ignorados pelo git)
+  app.py            Streamlit app (reads the fct_despesas_mensais mart and the location dimensions)
+  Dockerfile        dashboard image (the `dashboard` Compose service); runs as a regular user, not root
+  requirements.txt  dashboard dependencies, separate from the pipeline's
+.streamlit/         Streamlit configuration (no telemetry, localhost only)
+.dockerignore       what stays out of the images' build context
+.github/dependabot.yml  weekly alerts for new versions and security fixes in dependencies
+SECURITY.md         what is protected, what is missing before going public, and how to rotate secrets
+docs/notes.md    API behavior and data quirks (in Portuguese)
+data/raw/        raw JSON files (ignored by git)
 ```
 
-## Decisões de projeto
+## Design decisions
 
-- **Raw como JSONB.** A tabela raw guarda o payload exatamente como veio. Campo novo, removido ou com tipo diferente na API não quebra a carga; o problema aparece na camada de transformação, onde os testes do dbt o pegam com mensagem clara.
-- **Idempotência.** O load é um UPSERT sobre `UNIQUE (codigo_ibge, periodo)`. O transform apaga e reinsere a partição inteira (município + período, que é uma linha do raw) na mesma transação, porque a API não manda id por despesa. Rodar duas vezes o mesmo período não duplica nada.
-- **Retry só onde faz sentido.** Erro 5xx, falha de rede e resposta 200 com corpo que não é JSON são tentados de novo, com espera crescente. Erro 4xx falha na hora, e uma extração que falhou nunca grava arquivo.
-- **Um único `main`.** Os módulos só definem funções; só o `main.py` é executável.
-- **O município é identificado pelo código IBGE.** O nome se repete entre estados ("Bom Jesus"), então a chave do raw, do staging e do mart é o código de 7 dígitos. O nome que a API do TCE-SP espera (`slug`) fica só nas bordas (linha de comando, parâmetros do DAG, nome do arquivo em `data/raw`) e na `dim_municipio`, que faz a tradução. Quando entrar o primeiro estado novo, o raw e os modelos já estão prontos pra isso; falta só uma fonte de despesas pra ele.
-- **dbt.** Staging materializa como view, marts como table. Os testes cobrem `not_null`, `accepted_values` (fornecedor e evento), `relationships` (inclusive despesa → município), e testes singulares: grão do mart, reconciliação com o staging **por município e período** (uma soma geral não pegaria valores trocados entre cidades), código IBGE × UF e slug único por UF.
-- **Dois níveis de teste.** O dbt testa os **dados**; o `tests/` testa o **código Python** (conversões, retry, regras de "mês sem dado", validação de cidades, cliente do Airflow).
+- **Raw as JSONB.** The raw table stores the payload exactly as it arrived. A new, removed or differently typed field in the API does not break the load; the problem shows up in the transformation layer, where dbt's tests catch it with a clear message.
+- **Idempotency.** The load is an UPSERT on `UNIQUE (codigo_ibge, periodo)`. The transform deletes and reinserts the whole partition (municipality + period, which is one raw row) in the same transaction, because the API sends no id per expense. Running the same period twice duplicates nothing.
+- **Retry only where it makes sense.** A 5xx error, a network failure and a 200 response whose body is not JSON are retried with growing waits. A 4xx error fails immediately, and an extraction that failed never writes a file.
+- **A single `main`.** The modules only define functions; only `main.py` is executable.
+- **The municipality is identified by IBGE code.** Names repeat across states ("Bom Jesus"), so the key of raw, staging and mart is the 7-digit code. The name the TCE-SP API expects (`slug`) lives only at the edges (command line, DAG parameters, file names in `data/raw`) and in `dim_municipio`, which does the translation. When the first new state arrives, raw and models are already ready for it; all that is missing is an expenses source for it.
+- **dbt.** Staging materializes as views, marts as tables. The tests cover `not_null`, `accepted_values` (supplier and event), `relationships` (including expense → municipality), and singular tests: mart grain, reconciliation with staging **per municipality and period** (a grand total would not catch values swapped between cities), IBGE code × state, and unique slug per state.
+- **Two levels of tests.** dbt tests the **data**; `tests/` tests the **Python code** (conversions, retry, "month without data" rules, city validation, the Airflow client).
+- **Validate at the edges, with an allow-list.** City, year, month and state become part of a URL or a file name, so they are checked against what is known to be valid (`src/validacao.py`) before use. There is no list of forbidden characters to forget one from.
 
-## Particularidades dos dados
+## Security
 
-Os detalhes estão em [docs/notes.md](docs/notes.md). Os pontos que mais importam:
+The project is designed to run on your own machine: everything listens on `127.0.0.1` only, passwords are mandatory (there is no public default), the dashboard container runs without root, without extra capabilities and with a read-only filesystem, the dashboard talks to Airflow through a user with the `User` role, and everything that becomes a URL or a file name is validated. Dependencies are pinned and have no known vulnerabilities. What is still missing before publishing on the internet (a read-only database user, SSL, protection of the on-demand load) is in [SECURITY.md](SECURITY.md).
 
-- A API não pagina e devolve o período inteiro de uma vez.
-- Todos os campos vêm como texto, com valor em formato brasileiro (`"1266,00"`) e data em `DD/MM/AAAA`.
-- A capital (São Paulo) é auditada pelo TCM-SP, não pelo TCE-SP, então a API devolve `[]` pra ela.
-- O campo `evento` tem 5 valores que são **etapas do mesmo gasto**: `Empenhado`, `Valor Liquidado`, `Valor Pago`, `Reforço` e `Anulação`. Somar `vl_despesa` sem separar as etapas conta o mesmo gasto várias vezes. Use `fct_despesas_mensais`, que traz cada etapa em uma coluna própria.
+## Data quirks
 
-## Como este projeto foi feito
+The details are in [docs/notes.md](docs/notes.md) (in Portuguese). The points that matter most:
 
-Projeto de estudo, parte de um roadmap de engenharia de dados (Python, PostgreSQL, dbt, Airflow). Usei o Claude (Anthropic) como tutor e par de programação: ele escreveu boa parte do código a partir das decisões que tomamos juntos, e eu conduzi o projeto passo a passo, decidindo a arquitetura (ELT com raw em JSONB, idempotência por UPSERT e partition overwrite, um único ponto de entrada, escopo dos marts) e pedindo a explicação de cada conceito antes de seguir. Os resultados foram validados contra dados reais: a versão em dbt foi comparada com a versão em Python, e o mart é reconciliado com o staging por teste.
+- The API does not paginate and returns the whole period at once.
+- All fields arrive as text, with values in Brazilian format (`"1266,00"`) and dates as `DD/MM/YYYY`.
+- The state capital (São Paulo) is audited by TCM-SP, not TCE-SP, so the API returns `[]` for it.
+- The `evento` field has 5 values that are **stages of the same expense**: `Empenhado`, `Valor Liquidado`, `Valor Pago`, `Reforço` and `Anulação`. Adding up `vl_despesa` without separating the stages counts the same expense several times. Use `fct_despesas_mensais`, which has each stage in its own column.
+
+## How this project was made
+
+A learning project, part of a data engineering roadmap (Python, PostgreSQL, dbt, Airflow). I used Claude (Anthropic) as a tutor and pair programmer: it wrote a good part of the code from the decisions we made together, and I drove the project step by step, deciding the architecture (ELT with raw in JSONB, idempotency through UPSERT and partition overwrite, a single entry point, the scope of the marts) and asking for an explanation of each concept before moving on. The results were validated against real data: the dbt version was compared with the Python version, and the mart is reconciled with staging by a test.
 
 ## Roadmap
 
-- [x] Fase 1: extract, load e transform manuais em Python, com backfill
-- [x] Fase 2: dbt com staging, mart e testes de qualidade
-- [x] Fase 3: orquestração com Airflow (DAG mensal `despesas_mensais`; execução agendada e backfill real ainda não exercitados, só simulados)
-- [x] Dashboard em Streamlit (filtros, gráficos e tabela; roda em contêiner pelo Compose)
-- [x] Catálogo de municípios (IBGE) e chave do raw pelo código IBGE
-- [x] Carga sob demanda pelo dashboard (via API do Airflow)
-- [ ] Outros estados: o raw e os modelos já estão prontos, mas cada estado precisa de uma fonte de despesas própria (cada tribunal de contas tem uma API diferente, e nenhuma foi verificada)
-- [ ] Execução agendada real e backfill do Airflow: só simulados até hoje
-- [ ] Seletor de só mês e ano no dashboard (hoje é um calendário de datas em que o dia é ignorado)
+- [x] Phase 1: manual extract, load and transform in Python, with backfill
+- [x] Phase 2: dbt with staging, mart and quality tests
+- [x] Phase 3: orchestration with Airflow (monthly `despesas_mensais` DAG; scheduled run and real backfill not yet exercised, only simulated)
+- [x] Streamlit dashboard (filters, charts and table; runs in a container through Compose)
+- [x] Municipality catalog (IBGE) and raw key by IBGE code
+- [x] On-demand load from the dashboard (through the Airflow API)
+- [x] Security hardening (local-first defaults, input validation, least-privilege Airflow user; see [SECURITY.md](SECURITY.md))
+- [ ] Public deployment (free tier first; see the checklist in [SECURITY.md](SECURITY.md))
+- [ ] Other states: raw and models are ready, but each state needs its own expenses source (each audit court has a different API, and none has been verified)
+- [ ] Real scheduled run and Airflow backfill: only simulated so far
+- [ ] Month-and-year-only picker in the dashboard (today it is a date picker in which the day is ignored)

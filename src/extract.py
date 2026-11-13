@@ -2,17 +2,24 @@ import json
 from pathlib import Path
 
 from api_client import get_json
+from validacao import validar_cidade, validar_periodo
 
 API_BASE_URL = "https://transparencia.tce.sp.gov.br/api/json/despesas"
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 
 
 def buscar_despesas(cidade: str, ano: int, mes: int) -> list:
+    # a cidade entra na URL: só passa o que for um nome válido (nada de "/", "?" ou "..")
+    validar_cidade(cidade)
+    validar_periodo(ano, mes)
     url = f"{API_BASE_URL}/{cidade}/{ano}/{mes}"
     return get_json(url, f"{cidade}/{ano}/{mes}")
 
 
 def salvar_raw(dados: list, cidade: str, ano: int, mes: int) -> Path:
+    # a cidade entra no nome do arquivo: sem isso, "../../x" gravaria fora de data/raw
+    validar_cidade(cidade)
+    validar_periodo(ano, mes)
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     caminho = RAW_DIR / f"{cidade}_{ano}_{mes:02d}.json"
     caminho.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")

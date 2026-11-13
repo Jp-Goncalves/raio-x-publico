@@ -1,0 +1,24 @@
+# Dependabot: abre pull requests quando sai versão nova (ou correção de segurança) de uma
+# dependência. As versões do projeto são fixadas (==), então nada muda sem passar por revisão.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /dashboard
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /airflow
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /dashboard
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly

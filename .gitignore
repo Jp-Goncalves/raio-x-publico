@@ -1,4 +1,8 @@
 .env
+.env.*
+!.env.example
+*.pem
+*.key
 data/raw/*.json
 !data/raw/.gitkeep
 

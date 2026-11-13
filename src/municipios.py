@@ -3,6 +3,7 @@ from psycopg.types.json import Jsonb
 
 from api_client import get_json
 from db import conectar
+from validacao import validar_uf
 
 IBGE_URL = "https://servicodados.ibge.gov.br/api/v1/localidades/estados/{uf}/municipios"
 TCE_SP_MUNICIPIOS_URL = "https://transparencia.tce.sp.gov.br/api/json/municipios"
@@ -18,6 +19,7 @@ def _uf_do_payload(dados: list) -> str:
 
 
 def carregar_municipios(uf: str) -> str:
+    validar_uf(uf)  # a UF entra na URL do IBGE
     dados = get_json(IBGE_URL.format(uf=uf), f"IBGE municípios {uf}")
 
     if not dados:

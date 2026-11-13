@@ -5,11 +5,15 @@ from psycopg.types.json import Jsonb
 
 from db import conectar
 from municipios import codigo_ibge_da_cidade
+from validacao import validar_cidade, validar_periodo
 
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 
 
 def ler_raw(cidade: str, ano: int, mes: int) -> list:
+    # a cidade entra no nome do arquivo lido: sem isso, "../../x" leria fora de data/raw
+    validar_cidade(cidade)
+    validar_periodo(ano, mes)
     caminho = RAW_DIR / f"{cidade}_{ano}_{mes:02d}.json"
     with caminho.open(encoding="utf-8") as f:
         return json.load(f)
