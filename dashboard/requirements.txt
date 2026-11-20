@@ -1,5 +1,5 @@
 streamlit==1.67.0
 pandas==3.1.1
-psycopg[binary]==3.3.8
+psycopg[binary]==3.3.9
 python-dotenv==1.2.4
 requests==2.34.2
